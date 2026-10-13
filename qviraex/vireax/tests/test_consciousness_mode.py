@@ -301,6 +301,7 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
                         ritual_version="0.1",
                         consent_granted=True,
                         biometric=assertion,
+                        biometric_consent_granted=True,
                     )
                 self.assertEqual(mode.state, ObserverState.INACTIVE)
 
