@@ -39,3 +39,19 @@ The caller must obtain approval before including private or sensitive context. C
 ## Limits
 
 The audit hash chain helps detect changes relative to a trusted record but does not prove authorship, factual accuracy, or tamper-proof persistence. A head hash only acts as a trust anchor if it is retained independently of the ledger being checked. Defensive record snapshots reduce accidental mutation but do not protect against a process owner who can alter internal state. Output hashes are not digital signatures. Consensus is not verification. Live provider integration and production security require separate tests and release review.
+
+## Chat window
+
+The web app's **VIREAX Chat** page (`/#/vireax`) runs `converse()` through the local bridge against your own Ollama models. Nothing goes to a cloud model.
+
+1. Start Ollama and pull at least two models.
+2. Start the bridge with default models:
+
+   ```bash
+   python local_bridge/mirrorme_bridge.py --vireax-model mkultra:0.3 --vireax-model mkultra:0.4
+   ```
+
+   To use the hosted site rather than `npm run dev`, also allow its origin, e.g. `--allowed-origin https://cv1admin.github.io`. Chrome, Edge and Firefox allow an HTTPS page to call the loopback bridge; Safari does not.
+3. Open the page, pick two to four models and one to three rounds, and ask.
+
+Bridge routes: `GET /api/vireax/models` lists installed Ollama models; `POST /api/vireax/converse` takes `{ task, models?, max_rounds? }`. The browser may choose model names but never the endpoint, which stays the bridge's configured Ollama URL. Tasks are capped at 20,000 characters and each output at 8,000. Every result is `completed_unverified`, and each question is a fresh session with no memory of earlier ones.

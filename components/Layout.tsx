@@ -1,6 +1,6 @@
 
 import React from 'react';
-import Sidebar from './Sidebar';
+import Sidebar, { MobileNav } from './Sidebar';
 import { SimulationState, GateStatus } from '../types';
 
 interface LayoutProps {
@@ -27,25 +27,25 @@ const Layout: React.FC<LayoutProps> = ({ children, simState, toggleSimulation })
     <div className="flex h-screen w-full bg-slate-950 text-slate-200 overflow-hidden">
       <Sidebar />
       <main className="flex-1 flex flex-col min-w-0">
-        <header className="h-14 border-b border-slate-800 flex items-center justify-between px-6 bg-slate-900/50 backdrop-blur-md z-50">
-          <div className="flex items-center gap-4">
-            <h1 className="font-bold tracking-tight text-lg text-cyan-400">Civilisation.One <span className="text-slate-500 font-normal">/</span> Unified Intelligence Console</h1>
-            <div className="h-4 w-[1px] bg-slate-700" />
-            <div className="flex items-center gap-3">
+        <header className="h-14 border-b border-slate-800 flex items-center justify-between gap-3 px-3 md:px-6 bg-slate-900/50 backdrop-blur-md z-50">
+          <div className="flex items-center gap-4 min-w-0">
+            <h1 className="font-bold tracking-tight text-sm md:text-lg text-cyan-400 truncate">Civilisation.One <span className="text-slate-500 font-normal">/</span> Unified Intelligence Console</h1>
+            <div className="hidden md:block h-4 w-[1px] bg-slate-700" />
+            <div className="hidden md:flex items-center gap-3">
               <span className="text-[10px] uppercase font-bold tracking-widest text-slate-500">Gate</span>
               <div className={`px-2 py-0.5 rounded text-[10px] font-black tracking-tighter ${getGateColor(simState.gateStatus)}`}>
                 {simState.gateStatus}
               </div>
             </div>
-            <div className="h-4 w-[1px] bg-slate-700" />
-            <div className="flex flex-col">
+            <div className="hidden md:block h-4 w-[1px] bg-slate-700" />
+            <div className="hidden md:flex flex-col">
               <span className="text-[8px] uppercase font-bold text-slate-600">Logic Layer</span>
               <span className={`text-[10px] font-black tracking-widest ${logicStatus.color}`}>{logicStatus.label}</span>
             </div>
           </div>
           
-          <div className="flex items-center gap-6">
-            <div className="flex flex-col items-end">
+          <div className="flex items-center gap-3 md:gap-6 shrink-0">
+            <div className="hidden md:flex flex-col items-end">
                <span className="text-[8px] uppercase font-bold text-slate-600">Cognitive Velocity</span>
                <span className="text-xs mono text-cyan-500">
                 {simState.metrics[simState.metrics.length-1]?.gamma.toFixed(2) || '0.00'} Hz
@@ -61,11 +61,12 @@ const Layout: React.FC<LayoutProps> = ({ children, simState, toggleSimulation })
             >
               {simState.isRunning ? 'TERMINATE RUN' : 'INITIALIZE SIM'}
             </button>
-            <div className="text-xs mono text-slate-500 bg-slate-800/50 px-2 py-1 rounded border border-slate-700">
+            <div className="hidden md:block text-xs mono text-slate-500 bg-slate-800/50 px-2 py-1 rounded border border-slate-700">
               ID:{simState.currentFrame.toString().padStart(6, '0')}
             </div>
           </div>
         </header>
+        <MobileNav />
         <div className="flex-1 relative overflow-auto">
           {children}
         </div>

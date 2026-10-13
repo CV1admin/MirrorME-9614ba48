@@ -8,6 +8,7 @@ import OiiidsOperationsDashboard from './pages/OiiidsOperationsDashboard';
 import SystemMap from './pages/SystemMap';
 import MKultraV04 from './pages/MKultraV04';
 import Settings from './pages/Settings';
+import Vireax from './pages/Vireax';
 import { SimulationState, GateStatus, ContradictionEvent } from './types';
 import { createBrainNodes, createMetricFrame, isHealthyFrame } from './simulation/SimulationEngine';
 
@@ -123,6 +124,7 @@ const App: React.FC = () => {
           <Route path="/mirrorme" element={<MirrorMe simState={simState} />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/mkultra-v04" element={<MKultraV04 />} />
+          <Route path="/vireax" element={<Vireax />} />
           <Route path="/thin-line-theory" element={<ThinLineTheory />} />
         </Routes>
       </Layout>
