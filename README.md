@@ -485,3 +485,8 @@ MirrorME client
 Scientific claims use the MKdataONE status classes: established `[E]`, conditional `[C]`, definition `[D]`, phenomenological `[P]`, hypothesis `[H]`, and deprecated `[X]`. Automated processing cannot promote an `[H]` or `[P]` claim to `[E]`.
 
 See `docs/SYSTEM_REWIRE.md` for the trust boundaries, request envelope, and publication state machine.
+
+
+## VIREÁX full-stack integration
+
+See [docs/VIREAX_AGENT_INTEGRATION.md](docs/VIREAX_AGENT_INTEGRATION.md) for the reflection/criticism/verification contract, consented-memory state machine, security gates, repository boundaries, and production-readiness requirements. This is a specification and integration plan; it does not imply that all planned capabilities are implemented.
