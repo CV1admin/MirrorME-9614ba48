@@ -93,6 +93,11 @@ jobs:
             -p "test_*.py" \
             -v 2>&1 | tee python-test-output.txt
 
+      - name: Run VIREAX consciousness observer tests
+        shell: bash
+        run: |
+          python -m unittest qviraex.vireax.tests.test_consciousness_mode -v
+
       - name: Upload Python test report
         if: always()
         uses: actions/upload-artifact@v7

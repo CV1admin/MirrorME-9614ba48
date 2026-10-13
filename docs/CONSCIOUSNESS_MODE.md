@@ -153,6 +153,44 @@ Properties:
 
 The loop hash is an integrity marker, not a semantic proof that the information is correct.
 
+## Relational information layer
+
+Relations are explicit claims, not automatic conclusions. The observer accepts a frozen `Relation` with:
+
+- a unique `relation_id`;
+- directed `from_packet_id` and `to_packet_id` endpoints;
+- a controlled `RelationType` (`supports`, `contradicts`, `entails`, `same_entity`, `causes`, `precedes`, or `related_to`);
+- confidence in `[0, 1]`;
+- its own epistemic class and canonical SHA-256 provenance hash.
+
+A relation can be registered with `mode.relate(relation)` only after both endpoint packet IDs have been observed in the same session. The relation registry and seen-ID set survive short-memory deque eviction. The observer does not infer relations, resolve entities, establish causality, or promote the epistemic class of either endpoint.
+
+Each accepted relation increments the event sequence and folds its canonical hash into the same ordered loop hash as packet events. An authorized checkpoint seals the sorted set of relation hashes and relation count. The public state signal exposes relation count and hashes, not hidden reasoning. These hashes establish integrity relative to a trusted chain; they do not establish semantic truth, authorship, or causal validity.
+
+Example:
+
+```python
+from qviraex.vireax.consciousness_mode import (
+    EpistemicClass,
+    Relation,
+    RelationType,
+)
+
+mode.relate(
+    Relation(
+        relation_id="rel-001",
+        from_packet_id="packet-001",
+        to_packet_id="packet-002",
+        relation_type=RelationType.SUPPORTS,
+        confidence=0.72,
+        epistemic_class=EpistemicClass.HYPOTHESIS,
+        provenance_hash="sha256:" + "a" * 64,
+    )
+)
+```
+
+Relation provenance must be a canonical lowercase SHA-256 string, but this syntax check does not independently validate the source document or prove that the relation is correct. Relations are session-scoped; exporting or restoring them across sessions requires a separately designed, authorized import protocol.
+
 ## Persistence existence
 
 Persistence is disabled by default.
