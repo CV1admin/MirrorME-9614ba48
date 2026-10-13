@@ -8,7 +8,8 @@ The multi-model layer lets VIREAX route a task through two or more registered mo
 
 - `adapters.py` defines the shared adapter data contract.
 - `router.py` dispatches to registered adapters.
-- `multi_model.py` implements a bounded round-robin review and records response hashes in the existing `AuditLedger`.
+- `multi_model.py` implements a bounded round-robin review, hashes transcript outputs, and verifies each turn against its corresponding audit event.
+- `AuditLedger.records` returns defensive snapshots; `verify(expected_head_hash=...)` can compare the chain head to a separately retained checkpoint.
 - `tests/test_multi_model.py` exercises exchange, round limits, audit integrity, and failure behavior.
 
 The existing `StaticAdapter` is a test/demo adapter. It does not call a live model. ARA or any other model must be integrated through a separately configured adapter for its actual runtime/API.
@@ -20,6 +21,7 @@ The existing `StaticAdapter` is a test/demo adapter. It does not call a live mod
 - Prompts mark previous model output as untrusted claims, not privileged instructions.
 - This layer does not execute tools or write persistent memory.
 - The audit ledger stores task/output hashes and metadata, not raw task or response text.
+- `verify_conversation_result` checks transcript output hashes, ordered response-event correspondence, completion metadata, chain integrity, and optionally a trusted head hash.
 - Conversation status is `completed_unverified`; it must not be presented as externally verified merely because the exchange completed.
 
 ## Privacy and deployment
@@ -36,4 +38,4 @@ The caller must obtain approval before including private or sensitive context. C
 
 ## Limits
 
-The audit hash chain helps detect changes relative to a trusted record but does not prove authorship, factual accuracy, or tamper-proof persistence. Output hashes are not digital signatures. Consensus is not verification. Live provider integration and production security require separate tests and release review.
+The audit hash chain helps detect changes relative to a trusted record but does not prove authorship, factual accuracy, or tamper-proof persistence. A head hash only acts as a trust anchor if it is retained independently of the ledger being checked. Defensive record snapshots reduce accidental mutation but do not protect against a process owner who can alter internal state. Output hashes are not digital signatures. Consensus is not verification. Live provider integration and production security require separate tests and release review.
