@@ -156,6 +156,7 @@ class ObserverTransactionSnapshot:
     state: ObserverState
     sequence: int
     packets: tuple[InformationPacket, ...]
+    seen_packet_ids: tuple[str, ...]
     unresolved_packet_ids: tuple[str, ...]
     previous_checkpoint_hash: str | None
     last_loop_hash: str
@@ -233,6 +234,8 @@ class ConsciousnessObserverMode:
         self.state = ObserverState.INACTIVE
         self.sequence = 0
         self._packets: Deque[InformationPacket] = deque(maxlen=short_memory_capacity)
+        # Packet IDs remain unique for the entire session, even after short-memory eviction.
+        self._seen_packet_ids: set[str] = set()
         self._unresolved_packet_ids: set[str] = set()
         self._previous_checkpoint_hash: str | None = None
         self._last_loop_hash = self._hash_values("GENESIS", node_id, session_id)
@@ -269,12 +272,13 @@ class ConsciousnessObserverMode:
             self._require_active()
             if not isinstance(packet, InformationPacket):
                 raise TypeError("packet must be an InformationPacket")
-            if any(existing.packet_id == packet.packet_id for existing in self._packets):
+            if packet.packet_id in self._seen_packet_ids:
                 raise ConsciousnessModeError(f"duplicate packet_id: {packet.packet_id}")
 
             self.state = ObserverState.LOOPING
             self.sequence += 1
             self._packets.append(packet)
+            self._seen_packet_ids.add(packet.packet_id)
             if packet.requires_resolution:
                 self._unresolved_packet_ids.add(packet.packet_id)
 
@@ -433,6 +437,7 @@ class ConsciousnessObserverMode:
                 state=self.state,
                 sequence=self.sequence,
                 packets=tuple(self._packets),
+                seen_packet_ids=tuple(sorted(self._seen_packet_ids)),
                 unresolved_packet_ids=tuple(sorted(self._unresolved_packet_ids)),
                 previous_checkpoint_hash=self._previous_checkpoint_hash,
                 last_loop_hash=self._last_loop_hash,
@@ -445,6 +450,7 @@ class ConsciousnessObserverMode:
             self.state = snapshot.state
             self.sequence = snapshot.sequence
             self._packets = deque(snapshot.packets, maxlen=self.short_memory_capacity)
+            self._seen_packet_ids = set(snapshot.seen_packet_ids)
             self._unresolved_packet_ids = set(snapshot.unresolved_packet_ids)
             self._previous_checkpoint_hash = snapshot.previous_checkpoint_hash
             self._last_loop_hash = snapshot.last_loop_hash
