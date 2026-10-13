@@ -94,16 +94,19 @@ jobs:
             -v 2>&1 | tee python-test-output.txt
 
       - name: Run VIREAX consciousness observer tests
+        if: always()
         shell: bash
         run: |
           python -m unittest qviraex.vireax.tests.test_consciousness_mode -v
 
       - name: Run VIREAX multi-model communication tests
+        if: always()
         shell: bash
         run: |
           python -m unittest qviraex.vireax.tests.test_multi_model -v
 
-      - name: Run VIREAX multi-model communication tests
+      - name: Run VIREAX multi-model and provider adapter tests
+        if: always()
         shell: bash
         run: |
           python -m unittest qviraex.vireax.tests.test_multi_model -v
