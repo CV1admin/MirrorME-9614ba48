@@ -131,9 +131,22 @@ class BiometricRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
 
         assertion = make_signed_biometric_assertion(runtime, private_key)
-        runtime.activate(biometric=assertion)
+        runtime.activate(biometric=assertion, biometric_consent_granted=True)
         self.assertEqual(runtime.observer.state, ObserverState.OBSERVING)
         self.assertTrue(runtime.observer.signal()["biometric_verified"])
+
+    def test_runtime_can_revoke_biometric_consent(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        runtime = self.make_biometric_runtime(private_key)
+        runtime.activate(
+            biometric=make_signed_biometric_assertion(runtime, private_key),
+            biometric_consent_granted=True,
+        )
+
+        runtime.revoke_biometric_consent()
+        self.assertEqual(runtime.observer.state, ObserverState.SUSPENDED)
+        self.assertFalse(runtime.observer.signal()["biometric_verified"])
+        self.assertFalse(runtime.observer.signal()["biometric_consent_active"])
 
     def test_runtime_transaction_restores_active_assertion_on_publish_failure(self) -> None:
         private_key = Ed25519PrivateKey.generate()
@@ -142,14 +155,14 @@ class BiometricRuntimeIntegrationTests(unittest.TestCase):
 
         with patch.object(runtime.signal_bus, "publish", side_effect=RuntimeError("publish failed")):
             with self.assertRaisesRegex(RuntimeError, "publish failed"):
-                runtime.activate(biometric=assertion)
+                runtime.activate(biometric=assertion, biometric_consent_granted=True)
 
         self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
         self.assertFalse(runtime.observer.signal()["biometric_verified"])
 
         # The failed transaction consumes the prior nonce conservatively; a fresh
         # matcher assertion can activate the rolled-back runtime.
-        runtime.activate(biometric=make_signed_biometric_assertion(runtime, private_key))
+        runtime.activate(biometric=make_signed_biometric_assertion(runtime, private_key), biometric_consent_granted=True)
         self.assertTrue(runtime.observer.signal()["biometric_verified"])
 
 
