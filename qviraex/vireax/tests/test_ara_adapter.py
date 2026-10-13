@@ -1,9 +1,35 @@
 from __future__ import annotations
 
+import json
 import unittest
 
+from qviraex.vireax.adapters import AdapterEnvelope, AdapterSpec, StaticAdapter
 from qviraex.vireax.ara_adapter import create_ara_adapter_from_env, register_ara_adapter
+from qviraex.vireax.multi_model import converse, verify_conversation_result
 from qviraex.vireax.router import ModelRouter
+
+
+class FakeResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        return self.body[:size]
+
+
+class FakeOpener:
+    def open(self, request: object, timeout: float) -> FakeResponse:
+        body = json.dumps({
+            "id": "ara-test-response",
+            "choices": [{"message": {"content": "ARA challenges the assumption and asks for evidence."}}],
+        }).encode()
+        return FakeResponse(body)
 
 
 class AraAdapterConfigurationTests(unittest.TestCase):
@@ -40,6 +66,32 @@ class AraAdapterConfigurationTests(unittest.TestCase):
         })
         self.assertIs(router.registry["ARA"], adapter)
         self.assertEqual(router.registry["ARA"].spec.provider, "Dane Model")
+
+    def test_ara_runs_through_bounded_audited_conversation_with_mock_transport(self) -> None:
+        router = ModelRouter()
+        ara = register_ara_adapter(router, {
+            "VIREAX_ARA_ENDPOINT": "http://127.0.0.1:8000/v1/chat/completions",
+            "VIREAX_ARA_MODEL": "local-dane-model",
+        })
+        ara._opener = FakeOpener()  # type: ignore[assignment]
+        router.register(StaticAdapter(AdapterSpec(
+            model="VIREAX_LOCAL",
+            provider="local-test",
+            role="independent_critic",
+        )))
+
+        result = converse(
+            router,
+            task="Critically review a hypothesis.",
+            model_names=["ARA", "VIREAX_LOCAL"],
+            max_rounds=2,
+        )
+        self.assertEqual(len(result.turns), 4)
+        self.assertEqual(result.status, "completed_unverified")
+        self.assertTrue(verify_conversation_result(
+            result, expected_head_hash=result.audit.head_hash
+        ))
+        self.assertIn("ARA challenges the assumption", result.turns[0].output)
 
     def test_remote_endpoint_requires_explicit_secret_configuration(self) -> None:
         base = {
