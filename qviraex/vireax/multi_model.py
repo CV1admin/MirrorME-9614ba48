@@ -5,8 +5,7 @@ No model output is treated as verified evidence or persistent memory automatical
 from __future__ import annotations
 
 import hashlib
-import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Sequence
 from uuid import uuid4
 
@@ -58,6 +57,53 @@ def _context_prompt(task: str, prior: Sequence[ConversationTurn], round_number: 
     return "\n\n".join(sections)
 
 
+def verify_conversation_result(
+    result: ConversationResult,
+    *,
+    expected_head_hash: str | None = None,
+) -> bool:
+    """Verify transcript hashes, response-event correspondence, and audit chain.
+
+    If supplied, expected_head_hash must come from a separately trusted checkpoint.
+    This verifies integrity/correspondence, not provider identity or factual truth.
+    """
+    if not result.audit.verify(expected_head_hash=expected_head_hash):
+        return False
+
+    records = result.audit.records
+    response_records = [
+        record.payload for record in records
+        if record.payload.get("event") == "model_response"
+    ]
+    if len(response_records) != len(result.turns):
+        return False
+
+    for turn, payload in zip(result.turns, response_records):
+        if not isinstance(turn.output, str) or _sha256(turn.output) != turn.output_sha256:
+            return False
+        expected = {
+            "session_id": result.session_id,
+            "task_id": result.task_id,
+            "round_number": turn.round_number,
+            "model": turn.model,
+            "role": turn.role,
+            "output_sha256": turn.output_sha256,
+        }
+        if any(payload.get(key) != value for key, value in expected.items()):
+            return False
+
+    completed = [
+        record.payload for record in records
+        if record.payload.get("event") == "conversation_completed"
+    ]
+    if result.status != "completed_unverified" or len(completed) != 1:
+        return False
+    return (
+        completed[0].get("turn_count") == len(result.turns)
+        and completed[0].get("status") == result.status
+    )
+
+
 def converse(
     router: ModelRouter,
     *,
@@ -70,7 +116,7 @@ def converse(
 ) -> ConversationResult:
     """Run a bounded model-to-model review and return a hash-audited transcript.
 
-    The caller is responsible for obtaining user approval for any sensitive context.
+    The caller is responsible for obtaining approval for sensitive context.
     This function does not write memories, invoke tools, or execute external actions.
     """
     if not isinstance(task, str) or not task.strip():
@@ -81,7 +127,7 @@ def converse(
         raise ValueError("model_names must be unique")
     if not isinstance(max_rounds, int) or isinstance(max_rounds, bool) or not 1 <= max_rounds <= 3:
         raise ValueError("max_rounds must be between 1 and 3")
-    if not isinstance(max_output_chars, int) or max_output_chars < 1:
+    if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool) or max_output_chars < 1:
         raise ValueError("max_output_chars must be positive")
 
     session = session_id or str(uuid4())
@@ -137,7 +183,6 @@ def converse(
                     "output_truncated": len(result.output) > max_output_chars,
                 })
     except Exception as exc:
-        # Record a non-sensitive error class/message; do not store prompts or credentials.
         ledger.commit({
             "event": "conversation_failed",
             "error_type": type(exc).__name__,
@@ -149,10 +194,13 @@ def converse(
         "turn_count": len(turns),
         "status": "completed_unverified",
     })
-    return ConversationResult(
+    conversation = ConversationResult(
         session_id=session,
         task_id=task_key,
         turns=tuple(turns),
         audit=ledger,
         status="completed_unverified",
     )
+    if not verify_conversation_result(conversation, expected_head_hash=ledger.head_hash):
+        raise RuntimeError("internal transcript/audit verification failed")
+    return conversation
