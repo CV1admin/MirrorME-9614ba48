@@ -320,7 +320,10 @@ runtime = MKultraRuntime(
     biometric_required=True,
     device_public_key=trusted_device_public_key_pem,
 )
-runtime.activate(biometric=local_matcher.create_signed_assertion(...))
+runtime.activate(
+    biometric=local_matcher.create_signed_assertion(...),
+    biometric_consent_granted=True,
+)
 ```
 
-The snippet is an integration shape, not a complete matcher implementation. The assertion must be bound to the runtime's node, session and operator, and include a fresh nonce. Raw biometric samples and template hashes must not be logged or sent over the network. Replay/revocation tracking is currently process-local, so durable secure state, key lifecycle management, user-facing revocable biometric consent, and independent matcher spoof-resistance testing remain release blockers.
+The snippet is an integration shape, not a complete matcher implementation. The assertion must be bound to the runtime's node, session and operator, and include a fresh nonce. Raw biometric samples and template hashes must not be logged or sent over the network. Biometric consent is a separate required boolean when an assertion is supplied and can be revoked through `runtime.revoke_biometric_consent()`; revocation suspends the observer. Replay/revocation tracking is currently process-local, so durable secure state, key lifecycle management, a real local matcher, and independent matcher spoof-resistance testing remain release blockers.
