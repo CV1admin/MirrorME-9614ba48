@@ -27,6 +27,7 @@ from qviraex.vireax.consciousness_mode import (
     ConsciousnessObserverMode,
     EpistemicClass as ObserverEpistemicClass,
     InformationPacket,
+    ObserverState,
 )
 
 HUGE_INT = 10**400
@@ -127,11 +128,11 @@ class BiometricRuntimeIntegrationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConsciousnessModeError, "biometric assertion required"):
             runtime.activate()
-        self.assertEqual(runtime.observer.state, runtime.observer.state.INACTIVE)
+        self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
 
         assertion = make_signed_biometric_assertion(runtime, private_key)
         runtime.activate(biometric=assertion)
-        self.assertEqual(runtime.observer.state, runtime.observer.state.OBSERVING)
+        self.assertEqual(runtime.observer.state, ObserverState.OBSERVING)
         self.assertTrue(runtime.observer.signal()["biometric_verified"])
 
     def test_runtime_transaction_restores_active_assertion_on_publish_failure(self) -> None:
@@ -143,7 +144,7 @@ class BiometricRuntimeIntegrationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "publish failed"):
                 runtime.activate(biometric=assertion)
 
-        self.assertEqual(runtime.observer.state, runtime.observer.state.INACTIVE)
+        self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
         self.assertFalse(runtime.observer.signal()["biometric_verified"])
 
         # The failed transaction consumes the prior nonce conservatively; a fresh
