@@ -9,6 +9,8 @@ from qviraex.vireax.consciousness_mode import (
     EpistemicClass,
     InformationPacket,
     ObserverState,
+    Relation,
+    RelationType,
 )
 
 
@@ -75,6 +77,73 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
             mode.observe(self.make_packet("packet-a"))
 
         self.assertEqual(mode.loop().sequence, 2)
+
+    def test_relation_is_typed_hash_linked_and_checkpointed(self) -> None:
+        mode = self.make_mode(capacity=1, checkpoint_interval=20)
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True)
+        mode.observe(self.make_packet("source-a"))
+        mode.observe(self.make_packet("source-b"))
+        before = mode.loop().loop_hash
+
+        relation = Relation(
+            relation_id="rel-1",
+            from_packet_id="source-a",
+            to_packet_id="source-b",
+            relation_type=RelationType.SUPPORTS,
+            confidence=0.7,
+            epistemic_class=EpistemicClass.HYPOTHESIS,
+            provenance_hash="sha256:" + "a" * 64,
+        )
+        result = mode.relate(relation)
+        self.assertNotEqual(before, result.loop_hash)
+        self.assertEqual(mode.relations(), (relation,))
+        # source-a was evicted from short memory, but the session registry still knows its ID.
+        checkpoint = mode.checkpoint(persistence_authorized=True)
+        self.assertEqual(checkpoint.relation_count, 1)
+        self.assertEqual(checkpoint.relation_hashes, (relation.canonical_hash(),))
+        self.assertEqual(mode.signal()["relation_count"], 1)
+
+    def test_relation_requires_known_endpoints_and_unique_relation_id(self) -> None:
+        mode = self.make_mode()
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True)
+        mode.observe(self.make_packet("source-a"))
+        relation = Relation(
+            relation_id="rel-1",
+            from_packet_id="source-a",
+            to_packet_id="missing",
+            relation_type=RelationType.CONTRADICTS,
+            confidence=0.9,
+            epistemic_class=EpistemicClass.INFERENCE,
+            provenance_hash="sha256:" + "b" * 64,
+        )
+        with self.assertRaisesRegex(ConsciousnessModeError, "known session packet IDs"):
+            mode.relate(relation)
+        mode.observe(self.make_packet("source-b"))
+        mode.relate(relation)
+        with self.assertRaisesRegex(ConsciousnessModeError, "duplicate relation_id"):
+            mode.relate(relation)
+
+    def test_relation_rejects_invalid_provenance_hash_and_confidence(self) -> None:
+        with self.assertRaisesRegex(ValueError, "provenance_hash"):
+            Relation(
+                relation_id="rel-1",
+                from_packet_id="p1",
+                to_packet_id="p2",
+                relation_type=RelationType.SUPPORTS,
+                confidence=0.5,
+                epistemic_class=EpistemicClass.HYPOTHESIS,
+                provenance_hash="not-a-hash",
+            )
+        with self.assertRaises(ValueError):
+            Relation(
+                relation_id="rel-2",
+                from_packet_id="p1",
+                to_packet_id="p2",
+                relation_type=RelationType.SUPPORTS,
+                confidence=1.5,
+                epistemic_class=EpistemicClass.HYPOTHESIS,
+                provenance_hash="sha256:" + "c" * 64,
+            )
 
     def test_unresolved_information_must_be_resolved_explicitly(self) -> None:
         mode = self.make_mode()
