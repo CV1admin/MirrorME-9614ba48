@@ -147,7 +147,7 @@ class GovernedQuantumEvolutionTest(unittest.TestCase):
         self.assertTrue(protocol.verify_receipt(receipt))
         self.assertTrue(protocol.verify_audit_anchor(receipt))
 
-        ledger.records[0] = replace(ledger.records[0], previous_hash="corrupt")
+        ledger._records[0] = replace(ledger._records[0], previous_hash="corrupt")
         self.assertFalse(protocol.verify_audit_anchor(receipt))
         self.assertTrue(protocol.verify_receipt(receipt))
 
@@ -161,7 +161,7 @@ class GovernedQuantumEvolutionTest(unittest.TestCase):
         with self.assertRaisesRegex(QuantumProtocolError, "replayed"):
             protocol.anchor_receipt(replace(receipt, audit_anchor=None))
 
-        ledger.records.clear()
+        ledger._records.clear()
         self.assertFalse(protocol.verify_audit_anchor(receipt))
         self.assertTrue(protocol.verify_receipt(receipt))
 
