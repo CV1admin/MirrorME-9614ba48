@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 from .adapters import AdapterSpec
 from .openai_compatible_adapter import OpenAICompatibleAdapter
+from .router import ModelRouter
 
 
 def create_ara_adapter_from_env(
@@ -70,3 +71,13 @@ def create_ara_adapter_from_env(
         api_model=api_model,
         api_key_env=api_key_env,
     )
+
+
+def register_ara_adapter(
+    router: ModelRouter,
+    environ: Mapping[str, str] | None = None,
+) -> OpenAICompatibleAdapter:
+    """Create and register ARA in a router; does not make a network request."""
+    adapter = create_ara_adapter_from_env(environ)
+    router.register(adapter)
+    return adapter
