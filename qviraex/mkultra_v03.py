@@ -138,19 +138,55 @@ class MKultraRuntime:
                 self._checkpoints = list(checkpoints_snapshot)
                 raise
 
-    def activate(self, *, biometric: BiometricAssertion | None = None) -> None:
+    def activate(
+        self,
+        *,
+        biometric: BiometricAssertion | None = None,
+        biometric_consent_granted: bool = False,
+    ) -> None:
         with self._transaction():
             self.observer.activate(
                 ritual_name="i_am",
                 ritual_version="0.1",
                 consent_granted=self.identity.consent_active,
                 biometric=biometric,
+                biometric_consent_granted=biometric_consent_granted,
             )
             self.signal_bus.publish(
                 signal_type="mirrorme.observer.activated",
                 payload={
                     "session_id": self.session.session_id,
                     "runtime_id": self.session.runtime_id,
+                    "sentience_claim": False,
+                },
+                epistemic_class=EpistemicClass.OBSERVATION,
+            )
+
+    def revoke_biometric_consent(self) -> None:
+        """Revoke biometric consent fail-closed; a failed signal write cannot restore consent."""
+        with self._transaction_lock:
+            result = self.observer.revoke_biometric_consent()
+            self.signal_bus.publish(
+                signal_type="mirrorme.observer.biometric_consent_revoked",
+                payload={
+                    "session_id": self.session.session_id,
+                    "runtime_id": self.session.runtime_id,
+                    "observer_state": result.state,
+                    "sentience_claim": False,
+                },
+                epistemic_class=EpistemicClass.OBSERVATION,
+            )
+
+    def revoke_biometric_assertion(self, assertion_id: str) -> None:
+        """Revoke an assertion fail-closed and publish a minimal state event."""
+        with self._transaction_lock:
+            result = self.observer.revoke_biometric_assertion(assertion_id)
+            self.signal_bus.publish(
+                signal_type="mirrorme.observer.biometric_assertion_revoked",
+                payload={
+                    "session_id": self.session.session_id,
+                    "runtime_id": self.session.runtime_id,
+                    "observer_state": result.state,
                     "sentience_claim": False,
                 },
                 epistemic_class=EpistemicClass.OBSERVATION,
