@@ -141,7 +141,7 @@ def converse(
         raise ValueError("task exceeds configured size limit")
     missing = [name for name in model_names if name not in router.registry]
     if missing:
-        raise KeyError(f"adapters not registered: {
+        raise KeyError("adapters not registered: " + ", ".join(missing))
     if not isinstance(max_rounds, int) or isinstance(max_rounds, bool) or not 1 <= max_rounds <= 3:
         raise ValueError("max_rounds must be between 1 and 3")
     if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool) or not 1 <= max_output_chars <= 100_000:
