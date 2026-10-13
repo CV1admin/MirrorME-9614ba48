@@ -162,11 +162,16 @@ def converse(
 
     try:
         for round_number in range(1, max_rounds + 1):
+            # Snapshot peer contributions before the round starts so every model in
+            # a round sees the same context. Round 1 sees no peer output at all,
+            # which keeps initial analyses independent (audit finding F-01).
+            prior_rounds = tuple(turns)
+            role = "independent_analyst" if round_number == 1 else "critical_reviewer"
             for model_name in model_names:
-                prompt = _context_prompt(task, turns, round_number)
+                prompt = _context_prompt(task, prior_rounds, round_number)
                 envelope = AdapterEnvelope(
                     target_model=model_name,
-                    role="independent_analyst" if not turns else "critical_reviewer",
+                    role=role,
                     prompt=prompt,
                     metadata={
                         "session_id": session,

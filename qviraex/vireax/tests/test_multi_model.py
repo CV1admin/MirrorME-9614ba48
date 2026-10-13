@@ -26,6 +26,74 @@ class RecordingAdapter(StaticAdapter):
         )
 
 
+class RoundTaggedAdapter(RecordingAdapter):
+    """Returns a unique, round-tagged output so leakage between turns is detectable."""
+
+    def __init__(self, spec: AdapterSpec) -> None:
+        super().__init__(spec, response="")
+        self.roles: list[str] = []
+
+    def respond(self, envelope: AdapterEnvelope) -> AdapterResult:
+        self.roles.append(envelope.role)
+        self.response = f"OUTPUT<{self.spec.model}:round-{envelope.metadata['round_number']}>"
+        return super().respond(envelope)
+
+
+class FirstRoundIndependenceTests(unittest.TestCase):
+    """Audit finding F-01: initial analyses must not see peer outputs."""
+
+    def setUp(self) -> None:
+        self.router = ModelRouter()
+        self.adapters = [RoundTaggedAdapter(AdapterSpec(name, "test", "analyst")) for name in ("alpha", "beta", "gamma")]
+        for adapter in self.adapters:
+            self.router.register(adapter)
+
+    def _run(self, max_rounds: int):
+        return converse(
+            self.router,
+            task="Evaluate a sample claim.",
+            model_names=[adapter.spec.model for adapter in self.adapters],
+            max_rounds=max_rounds,
+            session_id="session-test",
+            task_id="task-test",
+        )
+
+    def test_no_first_round_prompt_contains_any_model_response(self) -> None:
+        result = self._run(max_rounds=2)
+        first_round_prompts = [adapter.prompts[0] for adapter in self.adapters]
+        for turn in result.turns:
+            for prompt in first_round_prompts:
+                self.assertNotIn(turn.output, prompt)
+        for prompt in first_round_prompts:
+            self.assertNotIn("Prior contributions", prompt)
+
+    def test_every_model_receives_an_identical_first_round_prompt(self) -> None:
+        self._run(max_rounds=1)
+        first_round_prompts = {adapter.prompts[0] for adapter in self.adapters}
+        self.assertEqual(len(first_round_prompts), 1)
+
+    def test_review_rounds_see_all_prior_rounds_but_not_same_round_peers(self) -> None:
+        self._run(max_rounds=3)
+        for round_index, round_number in ((1, 2), (2, 3)):
+            prompts = {adapter.prompts[round_index] for adapter in self.adapters}
+            self.assertEqual(len(prompts), 1, f"round {round_number} prompts differ between models")
+            prompt = prompts.pop()
+            for adapter in self.adapters:
+                for earlier in range(1, round_number):
+                    self.assertIn(f"OUTPUT<{adapter.spec.model}:round-{earlier}>", prompt)
+                self.assertNotIn(f"OUTPUT<{adapter.spec.model}:round-{round_number}>", prompt)
+
+    def test_roles_follow_round_not_dispatch_order(self) -> None:
+        result = self._run(max_rounds=2)
+        for adapter in self.adapters:
+            self.assertEqual(adapter.roles, ["independent_analyst", "critical_reviewer"])
+        self.assertEqual(
+            [turn.role for turn in result.turns if turn.round_number == 1],
+            ["independent_analyst"] * len(self.adapters),
+        )
+        self.assertTrue(verify_conversation_result(result))
+
+
 class MultiModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.router = ModelRouter()
@@ -45,7 +113,8 @@ class MultiModelTests(unittest.TestCase):
         )
         self.assertEqual(result.status, "completed_unverified")
         self.assertEqual(len(result.turns), 4)
-        self.assertIn("Alpha challenges the claim.", self.beta.prompts[0])
+        self.assertNotIn("Alpha challenges the claim.", self.beta.prompts[0])
+        self.assertIn("Alpha challenges the claim.", self.beta.prompts[1])
         self.assertIn("Beta identifies an uncertainty.", self.alpha.prompts[1])
         self.assertTrue(result.audit.verify())
         self.assertEqual(result.turns[0].output_sha256[:7], "sha256:")
