@@ -5,7 +5,7 @@ No model output is treated as verified evidence or persistent memory automatical
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Sequence
 from uuid import uuid4
 
