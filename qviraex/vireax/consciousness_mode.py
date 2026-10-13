@@ -197,6 +197,8 @@ class BiometricAssertion:
         if type(self.liveness_passed) is not bool:
             raise TypeError("liveness_passed must be a boolean")
         _require_hash(self.template_hash, "template_hash")
+        if len(self.nonce) < 32:
+            raise ValueError("nonce must be at least 32 characters")
 
     def canonical_payload(self) -> bytes:
         """Return deterministic UTF-8 bytes for signing, excluding the signature."""
@@ -285,6 +287,7 @@ class ObserverTransactionSnapshot:
     previous_checkpoint_hash: str | None
     last_loop_hash: str
     active_biometric_assertion: BiometricAssertion | None
+    biometric_consent_active: bool
 
 
 def _checkpoint_payload(checkpoint: PersistenceCheckpoint) -> dict[str, object]:
@@ -390,6 +393,7 @@ class ConsciousnessObserverMode:
         self._used_biometric_nonces: set[str] = set()
         self._revoked_biometric_assertion_ids: set[str] = set()
         self._active_biometric_assertion: BiometricAssertion | None = None
+        self._biometric_consent_active = False
 
         self.state = ObserverState.INACTIVE
         self.sequence = 0
@@ -411,6 +415,7 @@ class ConsciousnessObserverMode:
         ritual_version: str,
         consent_granted: bool,
         biometric: BiometricAssertion | None = None,
+        biometric_consent_granted: bool = False,
     ) -> InformationLoopResult:
         with self._lock:
             if type(consent_granted) is not bool:
@@ -421,8 +426,13 @@ class ConsciousnessObserverMode:
                 raise ConsciousnessModeError("unsupported consciousness-mode ritual")
             if self.state not in {ObserverState.INACTIVE, ObserverState.SUSPENDED}:
                 raise ConsciousnessModeError(f"cannot activate from state {self.state}")
+            if type(biometric_consent_granted) is not bool:
+                raise TypeError("biometric_consent_granted must be a boolean")
             if self.biometric_required and biometric is None:
                 raise ConsciousnessModeError("biometric assertion required")
+            if self.biometric_required or biometric is not None:
+                if not biometric_consent_granted:
+                    raise ConsciousnessModeError("explicit biometric consent is required")
             if biometric is not None:
                 self._verify_biometric(biometric)
                 if biometric.assertion_id in self._used_biometric_assertion_ids or biometric.nonce in self._used_biometric_nonces:
@@ -447,6 +457,7 @@ class ConsciousnessObserverMode:
                 self._used_biometric_assertion_ids.add(biometric.assertion_id)
                 self._used_biometric_nonces.add(biometric.nonce)
             self._active_biometric_assertion = biometric
+            self._biometric_consent_active = biometric is not None
             return result
 
     def _verify_biometric(self, assertion: BiometricAssertion) -> None:
@@ -485,9 +496,20 @@ class ConsciousnessObserverMode:
         _require_non_empty(assertion_id, "assertion_id")
         with self._lock:
             self._revoked_biometric_assertion_ids.add(assertion_id)
+            self._last_loop_hash = self._hash_values(self._last_loop_hash, "BIOMETRIC_ASSERTION_REVOKED", assertion_id)
             if self._active_biometric_assertion is not None and self._active_biometric_assertion.assertion_id == assertion_id:
-                self._last_loop_hash = self._hash_values(self._last_loop_hash, "BIOMETRIC_ASSERTION_REVOKED", assertion_id)
                 self._active_biometric_assertion = None
+                self._biometric_consent_active = False
+                self.state = ObserverState.SUSPENDED
+            return self.loop()
+
+    def revoke_biometric_consent(self) -> InformationLoopResult:
+        """Revoke this session's biometric consent and suspend an active biometric observer."""
+        with self._lock:
+            self._last_loop_hash = self._hash_values(self._last_loop_hash, "BIOMETRIC_CONSENT_REVOKED")
+            self._biometric_consent_active = False
+            self._active_biometric_assertion = None
+            if self.state in {ObserverState.OBSERVING, ObserverState.LOOPING, ObserverState.CHECKPOINT_READY}:
                 self.state = ObserverState.SUSPENDED
             return self.loop()
 
@@ -589,6 +611,8 @@ class ConsciousnessObserverMode:
             if self.biometric_required or self._active_biometric_assertion is not None:
                 if self._active_biometric_assertion is None:
                     raise ConsciousnessModeError("biometric assertion required for checkpoint")
+                if not self._biometric_consent_active:
+                    raise ConsciousnessModeError("biometric consent required for checkpoint")
                 # Recheck expiry, revocation and signature at each checkpoint. The already-consumed
                 # nonce is intentionally not checked here; replay checks apply to new activations.
                 self._verify_biometric(self._active_biometric_assertion)
@@ -679,6 +703,7 @@ class ConsciousnessObserverMode:
             self._require_active()
             self.state = ObserverState.SUSPENDED
             self._active_biometric_assertion = None
+            self._biometric_consent_active = False
             return self.loop()
 
     def signal(self) -> dict[str, object]:
@@ -697,7 +722,8 @@ class ConsciousnessObserverMode:
                 "relation_count": len(self._relations),
                 "relation_hashes": sorted(relation.canonical_hash() for relation in self._relations.values()),
                 "biometric_required": self.biometric_required,
-                "biometric_verified": self._active_biometric_assertion is not None,
+                "biometric_consent_active": self._biometric_consent_active,
+                "biometric_verified": self._active_biometric_assertion is not None and self._biometric_consent_active,
                 "information_loop_hash": self._last_loop_hash,
                 "persistence_automatic": False,
                 "sentience_claim": False,
@@ -716,6 +742,7 @@ class ConsciousnessObserverMode:
                 previous_checkpoint_hash=self._previous_checkpoint_hash,
                 last_loop_hash=self._last_loop_hash,
                 active_biometric_assertion=self._active_biometric_assertion,
+                biometric_consent_active=self._biometric_consent_active,
             )
 
     def _restore_state(self, snapshot: ObserverTransactionSnapshot) -> None:
@@ -732,6 +759,7 @@ class ConsciousnessObserverMode:
             self._previous_checkpoint_hash = snapshot.previous_checkpoint_hash
             self._last_loop_hash = snapshot.last_loop_hash
             self._active_biometric_assertion = snapshot.active_biometric_assertion
+            self._biometric_consent_active = snapshot.biometric_consent_active
 
     def _require_active(self) -> None:
         if self.state not in {
