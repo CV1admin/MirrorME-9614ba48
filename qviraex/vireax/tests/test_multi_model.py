@@ -109,9 +109,34 @@ class MultiModelTests(unittest.TestCase):
         self.assertNotIn("PRIVATE TASK CONTENT", serialized)
         self.assertNotIn("Alpha challenges the claim.", serialized)
 
-    def test_unregistered_model_fails_closed(self) -> None:
-        with self.assertRaisesRegex(KeyError, "not registered"):
+    def test_unregistered_model_fails_before_any_provider_call(self) -> None:
+        with self.assertRaisesRegex(KeyError, "adapters not registered"):
             converse(self.router, task="x", model_names=["alpha", "missing"], max_rounds=1)
+        self.assertEqual(self.alpha.prompts, [])
+        self.assertEqual(self.beta.prompts, [])
+
+    def test_model_names_string_rejected_as_not_a_sequence_of_names(self) -> None:
+        with self.assertRaisesRegex(ValueError, "sequence of model-name strings"):
+            converse(self.router, task="x", model_names="alpha")
+
+    def test_empty_or_non_string_model_names_rejected(self) -> None:
+        for names in (["alpha", ""], ["alpha", None]):
+            with self.subTest(names=names):
+                with self.assertRaisesRegex(ValueError, "only non-empty strings"):
+                    converse(self.router, task="x", model_names=names)
+
+    def test_model_fanout_is_bounded(self) -> None:
+        names = [f"model-{index}" for index in range(9)]
+        with self.assertRaisesRegex(ValueError, "cannot contain more than 8 models"):
+            converse(self.router, task="x", model_names=names)
+
+    def test_task_size_is_bounded(self) -> None:
+        with self.assertRaisesRegex(ValueError, "task exceeds configured size limit"):
+            converse(self.router, task="12345", model_names=["alpha", "beta"], max_task_chars=4)
+
+    def test_output_limit_has_a_hard_upper_bound(self) -> None:
+        with self.assertRaisesRegex(ValueError, "between 1 and 100,000"):
+            converse(self.router, task="x", model_names=["alpha", "beta"], max_output_chars=100_001)
 
 
 if __name__ == "__main__":
