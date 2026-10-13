@@ -103,6 +103,12 @@ jobs:
         run: |
           python -m unittest qviraex.vireax.tests.test_multi_model -v
 
+      - name: Run VIREAX multi-model communication tests
+        shell: bash
+        run: |
+          python -m unittest qviraex.vireax.tests.test_multi_model -v
+          python -m unittest qviraex.vireax.tests.test_openai_compatible_adapter -v
+
       - name: Upload Python test report
         if: always()
         uses: actions/upload-artifact@v7
