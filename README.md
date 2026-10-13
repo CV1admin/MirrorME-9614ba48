@@ -84,6 +84,22 @@ Llama    -> local_fallback
 
 ---
 
+## Local biometric assertion verification
+
+The VIREAX consciousness observer supports an optional local biometric assertion gate. It verifies Ed25519 signatures, node/session/operator binding, UTC timestamps, a short maximum assertion lifetime, configured confidence policy, and one-time nonce/assertion replay protection. The observer does not process camera frames or fingerprints and never adds the template hash to its loop hash or public state signal.
+
+The biometric matcher and its liveness detector must run locally and sign the canonical assertion payload only after their own checks pass. This gate does not prove legal identity or guarantee liveness; matcher accuracy and spoof resistance require separate hardware- and threat-model-specific evaluation. Assertion revocation is in-memory for the observer process; production deployments must persist revocation/consumption state securely and manage device-key rotation/revocation.
+
+Install Python runtime dependencies with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+See [Biometric Assertion Security](docs/BIOMETRIC_ASSERTION_SECURITY.md) for the threat model and test requirements.
+
+---
+
 ## Local development
 
 Install dependencies:
