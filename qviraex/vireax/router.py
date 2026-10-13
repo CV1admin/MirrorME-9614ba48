@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from .adapters import AdapterEnvelope, AdapterResult, AdapterSpec, StaticAdapter
+from .adapters import AdapterEnvelope, AdapterResult, AdapterSpec
 
 
 class ModelAdapter(Protocol):
