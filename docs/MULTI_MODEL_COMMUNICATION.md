@@ -12,7 +12,7 @@ The multi-model layer lets VIREAX route a task through two or more registered mo
 - `AuditLedger.records` returns defensive snapshots; `verify(expected_head_hash=...)` can compare the chain head to a separately retained checkpoint.
 - `tests/test_multi_model.py` exercises exchange, round limits, audit integrity, and failure behavior.\n- `ara_adapter.py` constructs the ARA/Dane Model adapter from trusted environment configuration; `tests/test_ara_adapter.py` checks missing configuration, rejects GitHub pages, and enforces remote HTTPS plus explicit credentials.
 
-The existing `StaticAdapter` is a test/demo adapter. It does not call a live model. The ARA (Dane Model) adapter factory lives in `qviraex/vireax/ara_adapter.py`; it requires an explicitly configured endpoint and exact model ID and never infers either from a GitHub profile. The supplied GitHub repositories URL is a webpage, not an inference endpoint. A live connection works only if ARA exposes the supported OpenAI-compatible chat-completions contract or a later provider-specific adapter is implemented.
+The existing `StaticAdapter` is a test/demo adapter. It does not call a live model. The ARA (Dane Model) adapter factory and `register_ara_adapter(router)` helper live in `qviraex/vireax/ara_adapter.py`; they require an explicitly configured endpoint and exact model ID and never infer either from a GitHub profile. The supplied GitHub repositories URL is a webpage, not an inference endpoint. A live connection works only if ARA exposes the supported OpenAI-compatible chat-completions contract or a later provider-specific adapter is implemented.
 
 ## Safety properties
 
