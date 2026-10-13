@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import base64
 import math
+import secrets
 import unittest
+from datetime import UTC, datetime, timedelta
 from dataclasses import replace
 from unittest.mock import patch
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from qviraex.cognitive.continuum import CognitiveContinuum
 from qviraex.cognitive.signal_bus import CognitiveSignalBus
@@ -16,9 +22,12 @@ from qviraex.existence.schemas import (
 from qviraex.identity.capsule import IdentityCapsuleError, IdentityCapsuleVerifier, capsule_hash
 from qviraex.mkultra_v03 import MKultraRuntime
 from qviraex.vireax.consciousness_mode import (
+    BiometricAssertion,
+    ConsciousnessModeError,
     ConsciousnessObserverMode,
     EpistemicClass as ObserverEpistemicClass,
     InformationPacket,
+    ObserverState,
 )
 
 HUGE_INT = 10**400
@@ -42,7 +51,12 @@ def make_identity() -> VerifiedIdentityContext:
     )
 
 
-def make_runtime(*, persistence_authorized: bool = False) -> MKultraRuntime:
+def make_runtime(
+    *,
+    persistence_authorized: bool = False,
+    biometric_required: bool = False,
+    device_public_key: str | bytes | None = None,
+) -> MKultraRuntime:
     identity = make_identity()
     session = AuthorizedSession(
         session_id="MK03-INTEGRITY-FOCUS",
@@ -52,7 +66,13 @@ def make_runtime(*, persistence_authorized: bool = False) -> MKultraRuntime:
         persistence_authorized=persistence_authorized,
         external_actions_authorized=False,
     )
-    return MKultraRuntime(identity=identity, session=session, checkpoint_interval=1)
+    return MKultraRuntime(
+        identity=identity,
+        session=session,
+        checkpoint_interval=1,
+        biometric_required=biometric_required,
+        device_public_key=device_public_key,
+    )
 
 
 def valid_capsule() -> dict[str, object]:
@@ -68,6 +88,82 @@ def valid_capsule() -> dict[str, object]:
     }
     capsule["capsule_id"] = capsule_hash(capsule)
     return capsule
+
+
+
+def make_signed_biometric_assertion(
+    runtime: MKultraRuntime,
+    private_key: Ed25519PrivateKey,
+) -> BiometricAssertion:
+    now = datetime.now(UTC)
+    unsigned = BiometricAssertion(
+        assertion_id="bio-" + secrets.token_hex(8),
+        node_id=runtime.identity.node_id,
+        session_id=runtime.session.session_id,
+        operator=runtime.session.operator,
+        method="local_face_match",
+        confidence=0.95,
+        liveness_passed=True,
+        template_hash="sha256:" + "d" * 64,
+        nonce=secrets.token_urlsafe(32),
+        issued_at=now.isoformat(),
+        expires_at=(now + timedelta(minutes=1)).isoformat(),
+        signature="unsigned-placeholder",
+    )
+    signature = base64.b64encode(private_key.sign(unsigned.canonical_payload())).decode("ascii")
+    return replace(unsigned, signature=signature)
+
+
+class BiometricRuntimeIntegrationTests(unittest.TestCase):
+    def make_biometric_runtime(self, private_key: Ed25519PrivateKey) -> MKultraRuntime:
+        public_key = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return make_runtime(biometric_required=True, device_public_key=public_key)
+
+    def test_runtime_activation_passes_assertion_to_observer(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        runtime = self.make_biometric_runtime(private_key)
+
+        with self.assertRaisesRegex(ConsciousnessModeError, "biometric assertion required"):
+            runtime.activate()
+        self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
+
+        assertion = make_signed_biometric_assertion(runtime, private_key)
+        runtime.activate(biometric=assertion, biometric_consent_granted=True)
+        self.assertEqual(runtime.observer.state, ObserverState.OBSERVING)
+        self.assertTrue(runtime.observer.signal()["biometric_verified"])
+
+    def test_runtime_can_revoke_biometric_consent(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        runtime = self.make_biometric_runtime(private_key)
+        runtime.activate(
+            biometric=make_signed_biometric_assertion(runtime, private_key),
+            biometric_consent_granted=True,
+        )
+
+        runtime.revoke_biometric_consent()
+        self.assertEqual(runtime.observer.state, ObserverState.SUSPENDED)
+        self.assertFalse(runtime.observer.signal()["biometric_verified"])
+        self.assertFalse(runtime.observer.signal()["biometric_consent_active"])
+
+    def test_runtime_transaction_restores_active_assertion_on_publish_failure(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        runtime = self.make_biometric_runtime(private_key)
+        assertion = make_signed_biometric_assertion(runtime, private_key)
+
+        with patch.object(runtime.signal_bus, "publish", side_effect=RuntimeError("publish failed")):
+            with self.assertRaisesRegex(RuntimeError, "publish failed"):
+                runtime.activate(biometric=assertion, biometric_consent_granted=True)
+
+        self.assertEqual(runtime.observer.state, ObserverState.INACTIVE)
+        self.assertFalse(runtime.observer.signal()["biometric_verified"])
+
+        # The failed transaction consumes the prior nonce conservatively; a fresh
+        # matcher assertion can activate the rolled-back runtime.
+        runtime.activate(biometric=make_signed_biometric_assertion(runtime, private_key), biometric_consent_granted=True)
+        self.assertTrue(runtime.observer.signal()["biometric_verified"])
 
 
 class HashChainIntegrityTests(unittest.TestCase):

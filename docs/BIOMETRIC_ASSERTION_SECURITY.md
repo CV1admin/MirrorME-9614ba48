@@ -22,7 +22,7 @@ Assertions bind to the configured node, operator, and session. `issued_at` and `
 
 ## Privacy and retention
 
-The template hash is potentially linkable biometric-derived metadata even though it is not the template itself. Keep it local to the matcher/observer boundary, never log it, never include it in the loop hash, and do not persist it by default. Raw images, templates, embeddings, and biometric samples must not be placed in the observer, audit ledger, telemetry, or network payloads. Biometric consent must remain separate, explicit, and revocable in the user-facing layer; the existing observer consent gate remains mandatory.
+The template hash is potentially linkable biometric-derived metadata even though it is not the template itself. Keep it local to the matcher/observer boundary, never log it, never include it in the loop hash, and do not persist it by default. Raw images, templates, embeddings, and biometric samples must not be placed in the observer, audit ledger, telemetry, or network payloads. Biometric consent is a separate explicit activation gate and can be revoked through the runtime API; the existing observer consent gate remains mandatory. A production user interface must make the scope, retention, and revocation consequences clear.
 
 ## Replay and revocation limitations
 

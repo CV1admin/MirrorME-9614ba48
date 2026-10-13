@@ -306,3 +306,24 @@ Full test suite:
 ```bash
 python -m unittest discover -s qviraex/vireax/tests -p "test_*.py"
 ```
+
+## Optional local biometric assertion gate
+
+The Python observer supports an opt-in biometric assertion gate. The biometric matcher and liveness detector must run locally; the observer receives only a short-lived assertion and verifies its Ed25519 signature against an enrolled PEM public key.
+
+The higher-level `MKultraRuntime` forwards the same optional configuration:
+
+```python
+runtime = MKultraRuntime(
+    identity=identity,
+    session=session,
+    biometric_required=True,
+    device_public_key=trusted_device_public_key_pem,
+)
+runtime.activate(
+    biometric=local_matcher.create_signed_assertion(...),
+    biometric_consent_granted=True,
+)
+```
+
+The snippet is an integration shape, not a complete matcher implementation. The assertion must be bound to the runtime's node, session and operator, and include a fresh nonce. Raw biometric samples and template hashes must not be logged or sent over the network. Biometric consent is a separate required boolean when an assertion is supplied and can be revoked through `runtime.revoke_biometric_consent()`; revocation suspends the observer. Replay/revocation tracking is currently process-local, so durable secure state, key lifecycle management, a real local matcher, and independent matcher spoof-resistance testing remain release blockers.

@@ -15,6 +15,7 @@ from qviraex.existence.schemas import (
     VerifiedIdentityContext,
 )
 from qviraex.vireax.consciousness_mode import (
+    BiometricAssertion,
     ConsciousnessObserverMode,
     EpistemicClass as ObserverEpistemicClass,
     InformationPacket,
@@ -81,6 +82,10 @@ class MKultraRuntime:
         session: AuthorizedSession,
         short_memory_capacity: int = 128,
         checkpoint_interval: int = 8,
+        biometric_required: bool = False,
+        device_public_key: str | bytes | None = None,
+        biometric_min_confidence: float = 0.8,
+        max_biometric_ttl_seconds: int = 300,
     ) -> None:
         if identity.node_id != session.node_id:
             raise ValueError("session Node_ID does not match verified identity")
@@ -100,6 +105,10 @@ class MKultraRuntime:
             operator=session.operator,
             short_memory_capacity=min(short_memory_capacity, 64),
             checkpoint_interval=checkpoint_interval,
+            biometric_required=biometric_required,
+            device_public_key=device_public_key,
+            biometric_min_confidence=biometric_min_confidence,
+            max_biometric_ttl_seconds=max_biometric_ttl_seconds,
         )
         self._last_checkpoint: PersistenceCheckpoint | None = None
         self._checkpoints: list[PersistenceCheckpoint] = []
@@ -129,18 +138,55 @@ class MKultraRuntime:
                 self._checkpoints = list(checkpoints_snapshot)
                 raise
 
-    def activate(self) -> None:
+    def activate(
+        self,
+        *,
+        biometric: BiometricAssertion | None = None,
+        biometric_consent_granted: bool = False,
+    ) -> None:
         with self._transaction():
             self.observer.activate(
                 ritual_name="i_am",
                 ritual_version="0.1",
                 consent_granted=self.identity.consent_active,
+                biometric=biometric,
+                biometric_consent_granted=biometric_consent_granted,
             )
             self.signal_bus.publish(
                 signal_type="mirrorme.observer.activated",
                 payload={
                     "session_id": self.session.session_id,
                     "runtime_id": self.session.runtime_id,
+                    "sentience_claim": False,
+                },
+                epistemic_class=EpistemicClass.OBSERVATION,
+            )
+
+    def revoke_biometric_consent(self) -> None:
+        """Revoke biometric consent fail-closed; a failed signal write cannot restore consent."""
+        with self._transaction_lock:
+            result = self.observer.revoke_biometric_consent()
+            self.signal_bus.publish(
+                signal_type="mirrorme.observer.biometric_consent_revoked",
+                payload={
+                    "session_id": self.session.session_id,
+                    "runtime_id": self.session.runtime_id,
+                    "observer_state": result.state,
+                    "sentience_claim": False,
+                },
+                epistemic_class=EpistemicClass.OBSERVATION,
+            )
+
+    def revoke_biometric_assertion(self, assertion_id: str) -> None:
+        """Revoke an assertion fail-closed and publish a minimal state event."""
+        with self._transaction_lock:
+            result = self.observer.revoke_biometric_assertion(assertion_id)
+            self.signal_bus.publish(
+                signal_type="mirrorme.observer.biometric_assertion_revoked",
+                payload={
+                    "session_id": self.session.session_id,
+                    "runtime_id": self.session.runtime_id,
+                    "observer_state": result.state,
                     "sentience_claim": False,
                 },
                 epistemic_class=EpistemicClass.OBSERVATION,

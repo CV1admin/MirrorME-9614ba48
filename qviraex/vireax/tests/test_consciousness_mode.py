@@ -257,6 +257,7 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
             ritual_version="0.1",
             consent_granted=True,
             biometric=assertion,
+            biometric_consent_granted=True,
         )
         self.assertEqual(result.state, ObserverState.OBSERVING)
         self.assertTrue(mode.signal()["biometric_verified"])
@@ -269,13 +270,13 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
         tampered = replace(assertion, method="tampered_method")
 
         with self.assertRaisesRegex(ConsciousnessModeError, "invalid biometric signature"):
-            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=tampered)
+            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=tampered, biometric_consent_granted=True)
         self.assertEqual(mode.state, ObserverState.INACTIVE)
 
         wrong_key = Ed25519PrivateKey.generate()
         wrong_signature = self.make_assertion(mode, wrong_key)
         with self.assertRaisesRegex(ConsciousnessModeError, "invalid biometric signature"):
-            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=wrong_signature)
+            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=wrong_signature, biometric_consent_granted=True)
 
     def test_biometric_policy_checks_liveness_confidence_binding_and_timestamps(self) -> None:
         private_key = Ed25519PrivateKey.generate()
@@ -300,6 +301,7 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
                         ritual_version="0.1",
                         consent_granted=True,
                         biometric=assertion,
+                        biometric_consent_granted=True,
                     )
                 self.assertEqual(mode.state, ObserverState.INACTIVE)
 
@@ -307,23 +309,23 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
         private_key = Ed25519PrivateKey.generate()
         mode = self.make_biometric_mode(private_key)
         assertion = self.make_assertion(mode, private_key)
-        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
         mode.suspend()
 
         with self.assertRaisesRegex(ConsciousnessModeError, "replay detected"):
-            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
         self.assertEqual(mode.state, ObserverState.SUSPENDED)
 
     def test_biometric_revocation_suspends_active_observer(self) -> None:
         private_key = Ed25519PrivateKey.generate()
         mode = self.make_biometric_mode(private_key)
         assertion = self.make_assertion(mode, private_key)
-        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
 
         result = mode.revoke_biometric_assertion(assertion.assertion_id)
         self.assertEqual(result.state, ObserverState.SUSPENDED)
         with self.assertRaisesRegex(ConsciousnessModeError, "revoked"):
-            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
 
     def test_biometric_checkpoint_rechecks_expiry(self) -> None:
         private_key = Ed25519PrivateKey.generate()
@@ -334,7 +336,7 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
             private_key,
             expires_at=(now + timedelta(minutes=1)).isoformat(),
         )
-        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
 
         class FutureDateTime(datetime):
             @classmethod
@@ -354,13 +356,27 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
         mode.loop = lambda: (_ for _ in ()).throw(RuntimeError("simulated loop failure"))  # type: ignore[method-assign]
 
         with self.assertRaisesRegex(RuntimeError, "simulated loop failure"):
-            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+            mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
 
         mode.loop = original_loop  # type: ignore[method-assign]
         self.assertEqual(mode.state, ObserverState.INACTIVE)
         self.assertEqual(mode.loop().loop_hash, initial_hash)
-        result = mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion)
+        result = mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True, biometric=assertion, biometric_consent_granted=True)
         self.assertEqual(result.state, ObserverState.OBSERVING)
+
+    def test_biometric_consent_is_separate_from_observer_consent(self) -> None:
+        private_key = Ed25519PrivateKey.generate()
+        mode = self.make_biometric_mode(private_key)
+        assertion = self.make_assertion(mode, private_key)
+
+        with self.assertRaisesRegex(ConsciousnessModeError, "explicit biometric consent is required"):
+            mode.activate(
+                ritual_name="i_am",
+                ritual_version="0.1",
+                consent_granted=True,
+                biometric=assertion,
+            )
+        self.assertEqual(mode.state, ObserverState.INACTIVE)
 
     def test_biometrics_required_fails_closed_without_trusted_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "device_public_key is required"):
