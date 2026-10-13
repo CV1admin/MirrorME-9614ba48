@@ -284,6 +284,7 @@ class ObserverTransactionSnapshot:
     unresolved_packet_ids: tuple[str, ...]
     previous_checkpoint_hash: str | None
     last_loop_hash: str
+    active_biometric_assertion: BiometricAssertion | None
 
 
 def _checkpoint_payload(checkpoint: PersistenceCheckpoint) -> dict[str, object]:
@@ -714,6 +715,7 @@ class ConsciousnessObserverMode:
                 unresolved_packet_ids=tuple(sorted(self._unresolved_packet_ids)),
                 previous_checkpoint_hash=self._previous_checkpoint_hash,
                 last_loop_hash=self._last_loop_hash,
+                active_biometric_assertion=self._active_biometric_assertion,
             )
 
     def _restore_state(self, snapshot: ObserverTransactionSnapshot) -> None:
@@ -729,6 +731,7 @@ class ConsciousnessObserverMode:
             self._unresolved_packet_ids = set(snapshot.unresolved_packet_ids)
             self._previous_checkpoint_hash = snapshot.previous_checkpoint_hash
             self._last_loop_hash = snapshot.last_loop_hash
+            self._active_biometric_assertion = snapshot.active_biometric_assertion
 
     def _require_active(self) -> None:
         if self.state not in {
