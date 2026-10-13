@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from qviraex.vireax.consciousness_mode import (
     ConsciousnessModeError,
@@ -64,6 +65,17 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
         self.assertEqual(mode.loop().packet_count, 2)
         self.assertEqual(mode.loop().sequence, 3)
 
+    def test_duplicate_packet_ids_are_rejected_after_short_memory_eviction(self) -> None:
+        mode = self.make_mode(capacity=1, checkpoint_interval=8)
+        mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True)
+        mode.observe(self.make_packet("packet-a"))
+        mode.observe(self.make_packet("packet-b"))
+
+        with self.assertRaisesRegex(ConsciousnessModeError, "duplicate packet_id"):
+            mode.observe(self.make_packet("packet-a"))
+
+        self.assertEqual(mode.loop().sequence, 2)
+
     def test_unresolved_information_must_be_resolved_explicitly(self) -> None:
         mode = self.make_mode()
         mode.activate(ritual_name="i_am", ritual_version="0.1", consent_granted=True)
@@ -94,6 +106,16 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
 
         self.assertTrue(first.checkpoint_hash.startswith("sha256:"))
         self.assertEqual(second.previous_checkpoint_hash, first.checkpoint_hash)
+        self.assertTrue(
+            mode.verify_checkpoint_chain(
+                [first, second],
+                expected_head_hash=second.checkpoint_hash,
+                expected_count=2,
+            )
+        )
+
+        tampered = replace(second, information_loop_hash=first.information_loop_hash)
+        self.assertFalse(mode.verify_checkpoint_chain([first, tampered]))
 
     def test_signal_disclaims_sentience_and_automatic_persistence(self) -> None:
         mode = self.make_mode()
