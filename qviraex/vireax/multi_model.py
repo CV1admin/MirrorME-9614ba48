@@ -111,6 +111,8 @@ def converse(
     model_names: Sequence[str],
     max_rounds: int = 2,
     max_output_chars: int = 20_000,
+    max_task_chars: int = 100_000,
+    max_models: int = 8,
     session_id: str | None = None,
     task_id: str | None = None,
 ) -> ConversationResult:
@@ -121,14 +123,29 @@ def converse(
     """
     if not isinstance(task, str) or not task.strip():
         raise ValueError("task must be a non-empty string")
-    if not model_names or len(model_names) < 2:
+    if isinstance(model_names, (str, bytes)) or not isinstance(model_names, Sequence):
+        raise ValueError("model_names must be a sequence of model-name strings")
+    if len(model_names) < 2:
         raise ValueError("at least two registered models are required for agent-to-agent review")
+    if not isinstance(max_models, int) or isinstance(max_models, bool) or not 2 <= max_models <= 16:
+        raise ValueError("max_models must be between 2 and 16")
+    if len(model_names) > max_models:
+        raise ValueError(f"model_names cannot contain more than {max_models} models")
+    if any(not isinstance(name, str) or not name.strip() for name in model_names):
+        raise ValueError("model_names must contain only non-empty strings")
     if len(set(model_names)) != len(model_names):
         raise ValueError("model_names must be unique")
+    if not isinstance(max_task_chars, int) or isinstance(max_task_chars, bool) or not 1 <= max_task_chars <= 1_000_000:
+        raise ValueError("max_task_chars must be between 1 and 1,000,000")
+    if len(task) > max_task_chars:
+        raise ValueError("task exceeds configured size limit")
+    missing = [name for name in model_names if name not in router.registry]
+    if missing:
+        raise KeyError(f"adapters not registered: {
     if not isinstance(max_rounds, int) or isinstance(max_rounds, bool) or not 1 <= max_rounds <= 3:
         raise ValueError("max_rounds must be between 1 and 3")
-    if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool) or max_output_chars < 1:
-        raise ValueError("max_output_chars must be positive")
+    if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool) or not 1 <= max_output_chars <= 100_000:
+        raise ValueError("max_output_chars must be between 1 and 100,000")
 
     session = session_id or str(uuid4())
     task_key = task_id or str(uuid4())
