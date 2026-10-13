@@ -29,6 +29,16 @@ class EpistemicClass(StrEnum):
     GOAL = "goal"
 
 
+class RelationType(StrEnum):
+    SUPPORTS = "supports"
+    CONTRADICTS = "contradicts"
+    ENTAILS = "entails"
+    SAME_ENTITY = "same_entity"
+    CAUSES = "causes"
+    PRECEDES = "precedes"
+    RELATED_TO = "related_to"
+
+
 class ObserverState(StrEnum):
     INACTIVE = "INACTIVE"
     OBSERVING = "OBSERVING"
@@ -101,6 +111,47 @@ class InformationPacket:
 
 
 @dataclass(frozen=True)
+class Relation:
+    """An explicit, typed relation claim between two session packet IDs."""
+
+    relation_id: str
+    from_packet_id: str
+    to_packet_id: str
+    relation_type: RelationType
+    confidence: float
+    epistemic_class: EpistemicClass
+    provenance_hash: str
+    created_at: str = ""
+
+    def __post_init__(self) -> None:
+        _require_non_empty(self.relation_id, "relation_id")
+        _require_non_empty(self.from_packet_id, "from_packet_id")
+        _require_non_empty(self.to_packet_id, "to_packet_id")
+        if self.from_packet_id == self.to_packet_id and self.relation_type != RelationType.SAME_ENTITY:
+            raise ValueError("self-relations are only allowed for same_entity")
+        if not isinstance(self.relation_type, RelationType):
+            raise TypeError("relation_type must be a RelationType")
+        if not isinstance(self.epistemic_class, EpistemicClass):
+            raise TypeError("epistemic_class must be an EpistemicClass")
+        object.__setattr__(self, "confidence", _coerce_confidence(self.confidence))
+        _require_hash(self.provenance_hash, "provenance_hash")
+        if self.created_at:
+            _require_non_empty(self.created_at, "created_at")
+        else:
+            object.__setattr__(self, "created_at", datetime.now(UTC).isoformat())
+
+    def canonical_hash(self) -> str:
+        payload = json.dumps(
+            asdict(self),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        return f"sha256:{sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+@dataclass(frozen=True)
 class InformationLoopResult:
     sequence: int
     packet_count: int
@@ -119,6 +170,8 @@ class PersistenceCheckpoint:
     sequence: int
     packet_count: int
     unresolved_packet_ids: tuple[str, ...]
+    relation_count: int
+    relation_hashes: tuple[str, ...]
     previous_checkpoint_hash: str | None
     information_loop_hash: str
     created_at: str
@@ -144,6 +197,14 @@ class PersistenceCheckpoint:
             raise ValueError("unresolved_packet_ids must contain non-empty strings")
         if len(set(self.unresolved_packet_ids)) != len(self.unresolved_packet_ids):
             raise ValueError("unresolved_packet_ids must be unique")
+        if isinstance(self.relation_count, bool) or not isinstance(self.relation_count, int) or self.relation_count < 0:
+            raise ValueError("relation_count must be a non-negative integer")
+        if not isinstance(self.relation_hashes, tuple) or len(self.relation_hashes) != self.relation_count:
+            raise ValueError("relation_hashes must be a tuple matching relation_count")
+        if len(set(self.relation_hashes)) != len(self.relation_hashes):
+            raise ValueError("relation_hashes must be unique")
+        for relation_hash in self.relation_hashes:
+            _require_hash(relation_hash, "relation_hash")
         if self.previous_checkpoint_hash is not None:
             _require_hash(self.previous_checkpoint_hash, "previous_checkpoint_hash")
         _require_hash(self.information_loop_hash, "information_loop_hash")
@@ -157,6 +218,8 @@ class ObserverTransactionSnapshot:
     sequence: int
     packets: tuple[InformationPacket, ...]
     seen_packet_ids: tuple[str, ...]
+    relations: tuple[Relation, ...]
+    seen_relation_ids: tuple[str, ...]
     unresolved_packet_ids: tuple[str, ...]
     previous_checkpoint_hash: str | None
     last_loop_hash: str
@@ -172,6 +235,8 @@ def _checkpoint_payload(checkpoint: PersistenceCheckpoint) -> dict[str, object]:
         "sequence": checkpoint.sequence,
         "packet_count": checkpoint.packet_count,
         "unresolved_packet_ids": list(checkpoint.unresolved_packet_ids),
+        "relation_count": checkpoint.relation_count,
+        "relation_hashes": list(checkpoint.relation_hashes),
         "previous_checkpoint_hash": checkpoint.previous_checkpoint_hash,
         "information_loop_hash": checkpoint.information_loop_hash,
         "created_at": checkpoint.created_at,
@@ -236,6 +301,9 @@ class ConsciousnessObserverMode:
         self._packets: Deque[InformationPacket] = deque(maxlen=short_memory_capacity)
         # Packet IDs remain unique for the entire session, even after short-memory eviction.
         self._seen_packet_ids: set[str] = set()
+        # The relation registry is session-scoped and intentionally outlives deque eviction.
+        self._relations: dict[str, Relation] = {}
+        self._seen_relation_ids: set[str] = set()
         self._unresolved_packet_ids: set[str] = set()
         self._previous_checkpoint_hash: str | None = None
         self._last_loop_hash = self._hash_values("GENESIS", node_id, session_id)
@@ -294,6 +362,39 @@ class ConsciousnessObserverMode:
             )
             return self.loop()
 
+    def relate(self, relation: Relation) -> InformationLoopResult:
+        """Register and hash-link an explicit relation; never infer one automatically."""
+        with self._lock:
+            self._require_active()
+            if not isinstance(relation, Relation):
+                raise TypeError("relation must be a Relation")
+            if relation.relation_id in self._seen_relation_ids:
+                raise ConsciousnessModeError(f"duplicate relation_id: {relation.relation_id}")
+            if relation.from_packet_id not in self._seen_packet_ids or relation.to_packet_id not in self._seen_packet_ids:
+                raise ConsciousnessModeError("both relation endpoints must reference known session packet IDs")
+
+            self.state = ObserverState.LOOPING
+            self.sequence += 1
+            self._relations[relation.relation_id] = relation
+            self._seen_relation_ids.add(relation.relation_id)
+            self._last_loop_hash = self._hash_values(
+                self._last_loop_hash,
+                str(self.sequence),
+                "RELATION",
+                relation.canonical_hash(),
+            )
+            self.state = (
+                ObserverState.CHECKPOINT_READY
+                if self.sequence % self.checkpoint_interval == 0
+                else ObserverState.OBSERVING
+            )
+            return self.loop()
+
+    def relations(self) -> tuple[Relation, ...]:
+        """Return the current session relation registry in deterministic ID order."""
+        with self._lock:
+            return tuple(self._relations[key] for key in sorted(self._relations))
+
     def resolve(self, packet_id: str) -> InformationLoopResult:
         with self._lock:
             self._require_active()
@@ -340,6 +441,8 @@ class ConsciousnessObserverMode:
                 "sequence": self.sequence,
                 "packet_count": len(self._packets),
                 "unresolved_packet_ids": sorted(self._unresolved_packet_ids),
+                "relation_count": len(self._relations),
+                "relation_hashes": sorted(relation.canonical_hash() for relation in self._relations.values()),
                 "previous_checkpoint_hash": self._previous_checkpoint_hash,
                 "information_loop_hash": self._last_loop_hash,
                 "created_at": created_at,
@@ -355,6 +458,8 @@ class ConsciousnessObserverMode:
                 sequence=self.sequence,
                 packet_count=len(self._packets),
                 unresolved_packet_ids=tuple(sorted(self._unresolved_packet_ids)),
+                relation_count=len(self._relations),
+                relation_hashes=tuple(sorted(relation.canonical_hash() for relation in self._relations.values())),
                 previous_checkpoint_hash=self._previous_checkpoint_hash,
                 information_loop_hash=self._last_loop_hash,
                 created_at=created_at,
@@ -426,6 +531,8 @@ class ConsciousnessObserverMode:
                 "sequence": self.sequence,
                 "packet_count": len(self._packets),
                 "unresolved_count": len(self._unresolved_packet_ids),
+                "relation_count": len(self._relations),
+                "relation_hashes": sorted(relation.canonical_hash() for relation in self._relations.values()),
                 "information_loop_hash": self._last_loop_hash,
                 "persistence_automatic": False,
                 "sentience_claim": False,
@@ -438,6 +545,8 @@ class ConsciousnessObserverMode:
                 sequence=self.sequence,
                 packets=tuple(self._packets),
                 seen_packet_ids=tuple(sorted(self._seen_packet_ids)),
+                relations=tuple(self._relations[key] for key in sorted(self._relations)),
+                seen_relation_ids=tuple(sorted(self._seen_relation_ids)),
                 unresolved_packet_ids=tuple(sorted(self._unresolved_packet_ids)),
                 previous_checkpoint_hash=self._previous_checkpoint_hash,
                 last_loop_hash=self._last_loop_hash,
@@ -451,6 +560,8 @@ class ConsciousnessObserverMode:
             self.sequence = snapshot.sequence
             self._packets = deque(snapshot.packets, maxlen=self.short_memory_capacity)
             self._seen_packet_ids = set(snapshot.seen_packet_ids)
+            self._relations = {relation.relation_id: relation for relation in snapshot.relations}
+            self._seen_relation_ids = set(snapshot.seen_relation_ids)
             self._unresolved_packet_ids = set(snapshot.unresolved_packet_ids)
             self._previous_checkpoint_hash = snapshot.previous_checkpoint_hash
             self._last_loop_hash = snapshot.last_loop_hash
