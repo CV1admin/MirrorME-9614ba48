@@ -26,12 +26,34 @@ interface HandshakeStatus {
   message: string;
 }
 
+const DEFAULT_BRIDGE_ENDPOINT = 'http://localhost:8765';
+const DEFAULT_OLLAMA_MODEL = 'mirrorme:latest';
+
 const DEFAULT_CONFIG: ModelConfig = {
   provider: 'ollama',
   geminiApiKey: '',
-  ollamaEndpoint: 'http://localhost:11434',
-  ollamaModel: 'llama3.1:8b',
+  ollamaEndpoint: DEFAULT_BRIDGE_ENDPOINT,
+  ollamaModel: DEFAULT_OLLAMA_MODEL,
 };
+
+function normalizeStoredConfig(parsed: Partial<ModelConfig>): ModelConfig {
+  const normalized: ModelConfig = {
+    provider: parsed.provider === 'gemini' ? 'gemini' : 'ollama',
+    geminiApiKey: parsed.geminiApiKey ?? '',
+    ollamaEndpoint: parsed.ollamaEndpoint?.trim() || DEFAULT_BRIDGE_ENDPOINT,
+    ollamaModel: parsed.ollamaModel?.trim() || DEFAULT_OLLAMA_MODEL,
+  };
+
+  if (
+    normalized.provider === 'ollama' &&
+    normalized.ollamaEndpoint === 'http://localhost:11434' &&
+    normalized.ollamaModel === 'llama3.1:8b'
+  ) {
+    return DEFAULT_CONFIG;
+  }
+
+  return normalized;
+}
 
 const Settings: React.FC = () => {
   const [config, setConfig] = useState<ModelConfig>(DEFAULT_CONFIG);
@@ -42,14 +64,122 @@ const Settings: React.FC = () => {
     message: 'No local session has been confirmed.',
   });
   const [memoryApproved, setMemoryApproved] = useState<boolean>(
-    () => window.localStorage.getItem(MEMORY_APPROVAL_KEY) === 'true'
+    () => typeof window !== 'undefined' && window.localStorage.getItem(MEMORY_APPROVAL_KEY) === 'true'
   );
 
-  useEffect(, []);
+  const bridgeBase = config.ollamaEndpoint.replace(/\/$/, '') || DEFAULT_BRIDGE_ENDPOINT;
+
+  const updateHandshakeStatus = (state: HandshakeState, message: string) => {
+    setHandshake({ state, message });
+  };
+
+  const fetchHandshakeStatus = async (sessionId: string): Promise<void> => {
+    try {
+      const response = await fetch(`${bridgeBase}/api/handshake/status?session_id=${encodeURIComponent(sessionId)}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'handshake_status_failed');
+      }
+      const session = data.session;
+      if (session?.state === 'VERIFIED_LOCAL_SESSION') {
+        updateHandshakeStatus('VERIFIED_LOCAL_SESSION', 'Local session confirmed through the bridge.');
+      } else if (session?.state === 'CHALLENGE_ISSUED') {
+        updateHandshakeStatus('CHALLENGE_ISSUED', 'Challenge issued. Confirm the session to complete handshake.');
+      } else if (session?.state === 'EXPIRED') {
+        updateHandshakeStatus('EXPIRED', 'The handshake challenge expired. Request a new one.');
+      } else {
+        updateHandshakeStatus('ERROR', 'Unexpected handshake status returned by the bridge.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateHandshakeStatus('ERROR', `Handshake status check failed: ${message}`);
+      window.localStorage.removeItem(HANDSHAKE_SESSION_KEY);
+      setChallenge(null);
+    }
+  };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    try {
+      const rawConfig = window.localStorage.getItem(MODEL_CONFIG_KEY);
+      if (rawConfig) {
+        const parsed = JSON.parse(rawConfig) as Partial<ModelConfig>;
+        setConfig(normalizeStoredConfig(parsed));
+      }
+    } catch {
+      window.localStorage.removeItem(MODEL_CONFIG_KEY);
+    }
+
+    const storedSessionId = window.localStorage.getItem(HANDSHAKE_SESSION_KEY);
+    if (storedSessionId) {
+      void fetchHandshakeStatus(storedSessionId);
+    }
+  }, []);
 
   const saveConfig = () => {
     window.localStorage.setItem(MODEL_CONFIG_KEY, JSON.stringify(config));
     setSavedAt(new Date().toLocaleTimeString());
+  };
+
+  const useLocalDefaults = () => {
+    setConfig(DEFAULT_CONFIG);
+    window.localStorage.setItem(MODEL_CONFIG_KEY, JSON.stringify(DEFAULT_CONFIG));
+    setSavedAt(new Date().toLocaleTimeString());
+  };
+
+  const startHandshake = async () => {
+    updateHandshakeStatus('NO_SESSION', 'Requesting handshake challenge from local bridge...');
+    try {
+      const response = await fetch(`${bridgeBase}/api/handshake/challenge`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'handshake_challenge_failed');
+      }
+      setChallenge({
+        session_id: data.session_id,
+        nonce: data.nonce,
+        expires_at_unix: data.expires_at_unix,
+      });
+      updateHandshakeStatus('CHALLENGE_ISSUED', 'Challenge issued. Confirm the local session to finish the handshake.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateHandshakeStatus('ERROR', `Handshake challenge failed: ${message}`);
+      setChallenge(null);
+    }
+  };
+
+  const verifyHandshake = async () => {
+    if (!challenge) return;
+
+    updateHandshakeStatus('CHALLENGE_ISSUED', 'Verifying handshake with local bridge...');
+    try {
+      const response = await fetch(`${bridgeBase}/api/handshake/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: challenge.session_id,
+          nonce: challenge.nonce,
+          operator: 'Local Operator',
+          confirmation_phrase: 'CONFIRM_LOCAL_MIRRORME',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'handshake_verify_failed');
+      }
+      window.localStorage.setItem(HANDSHAKE_SESSION_KEY, data.session_id);
+      updateHandshakeStatus('VERIFIED_LOCAL_SESSION', 'Local session verified. You may now enable memory approval.');
+      setChallenge(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      updateHandshakeStatus('ERROR', `Handshake verification failed: ${message}`);
+    }
+  };
+
+  const updateMemoryApproval = (approved: boolean) => {
+    setMemoryApproved(approved);
+    window.localStorage.setItem(MEMORY_APPROVAL_KEY, approved ? 'true' : 'false');
   };
 
   return (
@@ -238,7 +368,4 @@ const Settings: React.FC = () => {
 };
 
 export default Settings;
-function normalizeStoredConfig(parsed: Partial<ModelConfig>) {
-  throw new Error('Function not implemented.');
-}
 
