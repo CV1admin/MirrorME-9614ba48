@@ -287,7 +287,7 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
             ({"node_id": "did:cv1:other"}, "binding mismatch"),
             ({"session_id": "other-session"}, "binding mismatch"),
             ({"issued_at": (now + timedelta(minutes=1)).isoformat()}, "issued in the future"),
-            ({"expires_at": (now - timedelta(seconds=1)).isoformat()}, "expired"),
+            ({"issued_at": (now - timedelta(minutes=2)).isoformat(), "expires_at": (now - timedelta(minutes=1)).isoformat()}, "expired"),
             ({"issued_at": now.replace(tzinfo=None).isoformat()}, "must include a timezone"),
             ({"expires_at": (now + timedelta(hours=1)).isoformat()}, "lifetime exceeds policy"),
         )
