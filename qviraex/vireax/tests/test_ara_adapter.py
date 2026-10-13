@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from qviraex.vireax.ara_adapter import create_ara_adapter_from_env
+from qviraex.vireax.ara_adapter import create_ara_adapter_from_env, register_ara_adapter
+from qviraex.vireax.router import ModelRouter
 
 
 class AraAdapterConfigurationTests(unittest.TestCase):
@@ -30,6 +31,15 @@ class AraAdapterConfigurationTests(unittest.TestCase):
         self.assertEqual(adapter.spec.provider, "Dane Model")
         self.assertEqual(adapter.api_model, "local-dane-model")
         self.assertIsNone(adapter.api_key_env)
+
+    def test_registers_ara_in_router_without_network_request(self) -> None:
+        router = ModelRouter()
+        adapter = register_ara_adapter(router, {
+            "VIREAX_ARA_ENDPOINT": "http://127.0.0.1:8000/v1/chat/completions",
+            "VIREAX_ARA_MODEL": "local-dane-model",
+        })
+        self.assertIs(router.registry["ARA"], adapter)
+        self.assertEqual(router.registry["ARA"].spec.provider, "Dane Model")
 
     def test_remote_endpoint_requires_explicit_secret_configuration(self) -> None:
         base = {
