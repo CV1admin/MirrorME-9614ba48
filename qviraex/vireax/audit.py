@@ -17,13 +17,28 @@ class AuditRecord:
 
 @dataclass
 class AuditLedger:
-    """Small append-only hash chain used for traceability, not truth attestation."""
+    """Small hash chain for traceability, not truth or authorship attestation.
 
-    records: list[AuditRecord] = field(default_factory=list)
+    The public records property returns a defensive snapshot. This prevents
+    accidental mutation of the ledger through a returned record, but it is not
+    a security boundary against code that controls the process or its storage.
+    """
+
+    _records: list[AuditRecord] = field(default_factory=list, repr=False)
+
+    @property
+    def records(self) -> list[AuditRecord]:
+        """Return a deep-copied snapshot of records, never internal references."""
+        return copy.deepcopy(self._records)
+
+    @property
+    def head_hash(self) -> str:
+        """Return the current chain head, or GENESIS for an empty ledger."""
+        return self._records[-1].hash_value if self._records else "GENESIS"
 
     def commit(self, payload: Mapping[str, Any]) -> AuditRecord:
-        previous_hash = self.records[-1].hash_value if self.records else "GENESIS"
-        index = len(self.records)
+        previous_hash = self.head_hash
+        index = len(self._records)
         stored_payload = copy.deepcopy(dict(payload))
         normalized = _canonical_payload(stored_payload)
         digest = hashlib.sha256(f"{index}:{previous_hash}:{normalized}".encode("utf-8")).hexdigest()
@@ -33,12 +48,13 @@ class AuditLedger:
             previous_hash=previous_hash,
             hash_value=f"sha256:{digest}",
         )
-        self.records.append(record)
+        self._records.append(record)
         return copy.deepcopy(record)
 
-    def verify(self) -> bool:
+    def verify(self, *, expected_head_hash: str | None = None) -> bool:
+        """Verify chain structure/content, optionally against a trusted checkpoint."""
         previous_hash = "GENESIS"
-        for index, record in enumerate(self.records):
+        for index, record in enumerate(self._records):
             if record.index != index or record.previous_hash != previous_hash:
                 return False
             try:
@@ -49,17 +65,18 @@ class AuditLedger:
             if record.hash_value != f"sha256:{digest}":
                 return False
             previous_hash = record.hash_value
+        if expected_head_hash is not None and previous_hash != expected_head_hash:
+            return False
         return True
 
     def rollback_last(self, expected_hash: str) -> AuditRecord:
         """Remove only the current tail when its hash is explicitly acknowledged."""
-
-        if not self.records:
+        if not self._records:
             raise ValueError("audit ledger is empty")
-        current = self.records[-1]
+        current = self._records[-1]
         if current.hash_value != expected_hash:
             raise ValueError("audit rollback hash does not match the current ledger tail")
-        return self.records.pop()
+        return copy.deepcopy(self._records.pop())
 
 
 def _canonical_payload(payload: Mapping[str, Any]) -> str:
