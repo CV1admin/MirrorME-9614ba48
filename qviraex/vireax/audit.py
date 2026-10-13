@@ -76,7 +76,7 @@ class AuditLedger:
         current = self._records[-1]
         if current.hash_value != expected_hash:
             raise ValueError("audit rollback hash does not match the current ledger tail")
-        return self._records.pop()
+        return copy.deepcopy(self._records.pop())
 
 
 def _canonical_payload(payload: Mapping[str, Any]) -> str:
