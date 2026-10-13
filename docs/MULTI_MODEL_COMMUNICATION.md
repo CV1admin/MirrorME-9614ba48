@@ -10,9 +10,9 @@ The multi-model layer lets VIREAX route a task through two or more registered mo
 - `router.py` dispatches to registered adapters.
 - `multi_model.py` implements a bounded round-robin review, hashes transcript outputs, and verifies each turn against its corresponding audit event.
 - `AuditLedger.records` returns defensive snapshots; `verify(expected_head_hash=...)` can compare the chain head to a separately retained checkpoint.
-- `tests/test_multi_model.py` exercises exchange, round limits, audit integrity, and failure behavior.
+- `tests/test_multi_model.py` exercises exchange, round limits, audit integrity, and failure behavior.\n- `ara_adapter.py` constructs the ARA/Dane Model adapter from trusted environment configuration; `tests/test_ara_adapter.py` checks missing configuration, rejects GitHub pages, and enforces remote HTTPS plus explicit credentials.
 
-The existing `StaticAdapter` is a test/demo adapter. It does not call a live model. ARA or any other model must be integrated through a separately configured adapter for its actual runtime/API.
+The existing `StaticAdapter` is a test/demo adapter. It does not call a live model. The ARA (Dane Model) adapter factory and `register_ara_adapter(router)` helper live in `qviraex/vireax/ara_adapter.py`; they require an explicitly configured endpoint and exact model ID and never infer either from a GitHub profile. The supplied GitHub repositories URL is a webpage, not an inference endpoint. A live connection works only if ARA exposes the supported OpenAI-compatible chat-completions contract or a later provider-specific adapter is implemented.
 
 ## Safety properties
 
@@ -26,7 +26,7 @@ The existing `StaticAdapter` is a test/demo adapter. It does not call a live mod
 
 ## Privacy and deployment
 
-The caller must obtain approval before including private or sensitive context. Configure remote provider credentials only in the trusted runtime's secret store. A future HTTP adapter must use HTTPS for non-local endpoints, bounded timeouts and response sizes, safe endpoint allowlisting, and explicit data-sharing controls. Do not pass arbitrary user-provided URLs directly to a provider adapter.
+The caller must obtain approval before including private or sensitive context. Configure remote provider credentials only in the trusted runtime's secret store. The HTTP adapter uses bounded timeouts, prompt/response sizes, and rejects redirects. ARA configuration requires HTTPS and an explicit secret variable for remote endpoints; unauthenticated HTTP is permitted only on loopback. Do not pass arbitrary user-provided URLs directly to a provider adapter.
 
 ## Extension plan
 
