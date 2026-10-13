@@ -19,22 +19,17 @@ class AuditRecord:
 class AuditLedger:
     """Small hash chain for traceability, not truth or authorship attestation.
 
-    The public records property exposes the live ledger so callers can mutate it
-    intentionally in tests and code paths that need to simulate tampering. Use the
-    snapshot() method when a defensive copy is required.
+    The public records property returns a deep-copied snapshot. Internal mutation
+    and tampering tests must use the private storage explicitly; callers should not
+    be able to invalidate the ledger by mutating a public view.
     """
 
     _records: list[AuditRecord] = field(default_factory=list, repr=False)
 
     @property
     def records(self) -> list[AuditRecord]:
-        """Return the live ledger list.
-
-        This intentionally preserves the ability to tamper with or clear the ledger
-        in order to validate mutation-detection logic. A defensive snapshot is
-        available via snapshot().
-        """
-        return self._records
+        """Return a defensive deep copy of the ledger records."""
+        return self.snapshot()
 
     def snapshot(self) -> list[AuditRecord]:
         """Return a deep-copied snapshot of the current ledger."""
