@@ -7,6 +7,7 @@ import CivilisationDashboard from './pages/CivilisationDashboard';
 import OiiidsOperationsDashboard from './pages/OiiidsOperationsDashboard';
 import SystemMap from './pages/SystemMap';
 import MKultraV04 from './pages/MKultraV04';
+import Settings from './pages/Settings';
 import { SimulationState, GateStatus, ContradictionEvent } from './types';
 import { createBrainNodes, createMetricFrame, isHealthyFrame } from './simulation/SimulationEngine';
 
@@ -120,6 +121,7 @@ const App: React.FC = () => {
           <Route path="/system-map" element={<SystemMap />} />
           <Route path="/oiiids-operations" element={<OiiidsOperationsDashboard />} />
           <Route path="/mirrorme" element={<MirrorMe simState={simState} />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/mkultra-v04" element={<MKultraV04 />} />
           <Route path="/thin-line-theory" element={<ThinLineTheory />} />
         </Routes>
