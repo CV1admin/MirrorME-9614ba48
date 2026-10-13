@@ -18,6 +18,11 @@ Intelligence pipeline stub (hard rules #1–#5):
     POST /api/intelligence/route
     Body: { request, session, mk_decision?, publication_request? }
 
+VIREAX multi-model chat:
+    GET  /api/vireax/models
+    POST /api/vireax/converse
+    Body: { task, models?: [name, ...], max_rounds?: 1-3 }
+
 The handshake is local session confirmation. It is not cryptographic proof of legal
 identity and must not be represented as consciousness, biometric verification, or
 external account authentication.
@@ -46,6 +51,16 @@ try:
     from intelligence_pipeline.api import handle_scientific_route
 except ImportError:  # pragma: no cover - package always shipped with bridge
     handle_scientific_route = None  # type: ignore[assignment,misc]
+
+try:
+    from vireax_chat import (
+        VireaxModelError,
+        VireaxRequestError,
+        list_ollama_models,
+        run_vireax_chat,
+    )
+except ImportError:  # pragma: no cover - qviraex ships with the repository
+    run_vireax_chat = None  # type: ignore[assignment]
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -109,6 +124,12 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Chrome's Private Network Access preflight: lets an allowed HTTPS origin
+        # (e.g. the deployed site) reach this loopback-only bridge.
+        if origin and origin in self.server.allowed_origins and self.headers.get(  # type: ignore[attr-defined]
+            "Access-Control-Request-Private-Network"
+        ) == "true":
+            self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
 
     def _send_json(self, status: int, payload: dict[str, Any]) -> None:
@@ -148,8 +169,14 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
                     "handshake_protocol": HANDSHAKE_PROTOCOL_VERSION,
                     "intelligence_pipeline_stub": handle_scientific_route is not None,
                     "intelligence_route": "/api/intelligence/route",
+                    "vireax_chat": run_vireax_chat is not None,
+                    "vireax_default_models": list(getattr(self.server, "vireax_models", [])),
                 },
             )
+            return
+
+        if path == "/api/vireax/models":
+            self._handle_vireax_models()
             return
 
         if path == "/api/handshake/challenge":
@@ -180,6 +207,11 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
             if path == "/api/handshake/verify":
                 payload = _read_json(self)
                 self._handle_handshake_verify(payload)
+                return
+
+            if path == "/api/vireax/converse":
+                payload = _read_json(self)
+                self._handle_vireax_converse(payload)
                 return
 
             if path == "/api/intelligence/route":
@@ -377,6 +409,58 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
         for session_id in expired:
             del self.server.handshake_sessions[session_id]  # type: ignore[attr-defined]
 
+    def _handle_vireax_models(self) -> None:
+        if run_vireax_chat is None:
+            self._send_json(503, {"ok": False, "error": "vireax_unavailable"})
+            return
+        try:
+            models = list_ollama_models(self.server.ollama_url)  # type: ignore[attr-defined]
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            self._send_json(
+                502,
+                {
+                    "ok": False,
+                    "error": "ollama_unreachable",
+                    "detail": str(getattr(exc, "reason", exc)),
+                    "hint": "Start Ollama with `ollama serve`.",
+                },
+            )
+            return
+        self._send_json(
+            200,
+            {
+                "ok": True,
+                "models": models,
+                "default_models": list(getattr(self.server, "vireax_models", [])),
+            },
+        )
+
+    def _handle_vireax_converse(self, payload: dict[str, Any]) -> None:
+        if run_vireax_chat is None:
+            self._send_json(503, {"ok": False, "error": "vireax_unavailable"})
+            return
+        try:
+            result = run_vireax_chat(
+                payload,
+                ollama_url=self.server.ollama_url,  # type: ignore[attr-defined]
+                default_models=getattr(self.server, "vireax_models", []),
+            )
+        except VireaxRequestError as exc:
+            self._send_json(400, {"ok": False, "error": "invalid_request", "detail": str(exc)})
+            return
+        except VireaxModelError as exc:
+            self._send_json(
+                502,
+                {
+                    "ok": False,
+                    "error": "model_call_failed",
+                    "detail": str(exc),
+                    "hint": "Check that Ollama is running and every selected model is pulled.",
+                },
+            )
+            return
+        self._send_json(200, result)
+
     def _proxy_ollama_chat(self, payload: dict[str, Any]) -> None:
         ollama_url = self.server.ollama_url.rstrip("/")  # type: ignore[attr-defined]
         default_model = self.server.default_model  # type: ignore[attr-defined]
@@ -421,6 +505,12 @@ def main() -> None:
         dest="allowed_origins",
         help="Browser origin allowed to call the bridge; repeat for multiple origins.",
     )
+    parser.add_argument(
+        "--vireax-model",
+        action="append",
+        dest="vireax_models",
+        help="Default Ollama model for VIREAX chat; repeat for each model (at least two).",
+    )
     args = parser.parse_args()
 
     server = ThreadingHTTPServer((args.host, args.port), MirrorMeBridgeHandler)
@@ -429,6 +519,7 @@ def main() -> None:
     server.operator = args.operator  # type: ignore[attr-defined]
     server.allowed_origins = set(args.allowed_origins or DEFAULT_ALLOWED_ORIGINS)  # type: ignore[attr-defined]
     server.handshake_sessions = {}  # type: ignore[attr-defined]
+    server.vireax_models = list(args.vireax_models or [])  # type: ignore[attr-defined]
 
     print(f"MirrorME local bridge running at http://{args.host}:{args.port}")
     print(f"Proxy target: {args.ollama_url}/api/chat")
