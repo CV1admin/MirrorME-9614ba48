@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from qviraex.vireax.adapters import AdapterEnvelope, AdapterResult, AdapterSpec, StaticAdapter
-from qviraex.vireax.multi_model import converse
+from qviraex.vireax.multi_model import converse, verify_conversation_result
 from qviraex.vireax.router import ModelRouter
 
 
@@ -48,6 +49,42 @@ class MultiModelTests(unittest.TestCase):
         self.assertIn("Beta identifies an uncertainty.", self.alpha.prompts[1])
         self.assertTrue(result.audit.verify())
         self.assertEqual(result.turns[0].output_sha256[:7], "sha256:")
+        self.assertTrue(verify_conversation_result(result, expected_head_hash=result.audit.head_hash))
+        self.assertFalse(verify_conversation_result(result, expected_head_hash="sha256:" + "0" * 64))
+
+    def test_transcript_output_tampering_is_detected(self) -> None:
+        result = converse(
+            self.router,
+            task="Evaluate a sample claim.",
+            model_names=["alpha", "beta"],
+            max_rounds=1,
+        )
+        tampered_turn = replace(result.turns[0], output="forged response")
+        tampered_result = replace(result, turns=(tampered_turn, *result.turns[1:]))
+        self.assertFalse(verify_conversation_result(tampered_result))
+
+    def test_public_record_snapshot_cannot_mutate_ledger(self) -> None:
+        result = converse(
+            self.router,
+            task="Evaluate a sample claim.",
+            model_names=["alpha", "beta"],
+            max_rounds=1,
+        )
+        snapshot = result.audit.records
+        snapshot[1].payload["model"] = "tampered"
+        self.assertTrue(result.audit.verify())
+        self.assertTrue(verify_conversation_result(result))
+
+    def test_internal_payload_tampering_is_detected(self) -> None:
+        result = converse(
+            self.router,
+            task="Evaluate a sample claim.",
+            model_names=["alpha", "beta"],
+            max_rounds=1,
+        )
+        result.audit._records[1].payload["model"] = "tampered"
+        self.assertFalse(result.audit.verify())
+        self.assertFalse(verify_conversation_result(result))
 
     def test_requires_two_models(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least two"):
