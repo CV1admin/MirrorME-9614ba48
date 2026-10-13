@@ -119,9 +119,10 @@ class ConsciousnessObserverModeTest(unittest.TestCase):
         with self.assertRaisesRegex(ConsciousnessModeError, "known session packet IDs"):
             mode.relate(relation)
         mode.observe(self.make_packet("source-b"))
-        mode.relate(relation)
+        valid_relation = replace(relation, to_packet_id="source-b")
+        mode.relate(valid_relation)
         with self.assertRaisesRegex(ConsciousnessModeError, "duplicate relation_id"):
-            mode.relate(relation)
+            mode.relate(valid_relation)
 
     def test_relation_rejects_invalid_provenance_hash_and_confidence(self) -> None:
         with self.assertRaisesRegex(ValueError, "provenance_hash"):
