@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 from collections import deque
@@ -10,6 +12,10 @@ from hashlib import sha256
 from math import isfinite
 from threading import RLock
 from typing import Deque, Iterable
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 
 class ConsciousnessModeError(RuntimeError):
@@ -71,6 +77,17 @@ def _coerce_confidence(value: object) -> float:
     if not isfinite(result) or not 0.0 <= result <= 1.0:
         raise ValueError("confidence must be between 0 and 1")
     return result
+
+
+def _parse_utc_timestamp(value: str, field_name: str) -> datetime:
+    """Parse an ISO-8601 timestamp and require an explicit timezone."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ConsciousnessModeError(f"invalid biometric {field_name}") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ConsciousnessModeError(f"biometric {field_name} must include a timezone")
+    return parsed.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -149,6 +166,50 @@ class Relation:
             allow_nan=False,
         )
         return f"sha256:{sha256(payload.encode('utf-8')).hexdigest()}"
+
+
+@dataclass(frozen=True)
+class BiometricAssertion:
+    """Short-lived local matcher assertion; never contains raw biometric samples.
+
+    The template hash is treated as sensitive, potentially linkable metadata. It is
+    signed as part of the local assertion but is not added to the observer's hash
+    chain or exposed through its public state signal.
+    """
+
+    assertion_id: str
+    node_id: str
+    session_id: str
+    operator: str
+    method: str
+    confidence: float
+    liveness_passed: bool
+    template_hash: str
+    nonce: str
+    issued_at: str
+    expires_at: str
+    signature: str
+
+    def __post_init__(self) -> None:
+        for field_name in ("assertion_id", "node_id", "session_id", "operator", "method", "nonce", "issued_at", "expires_at", "signature"):
+            _require_non_empty(getattr(self, field_name), field_name)
+        object.__setattr__(self, "confidence", _coerce_confidence(self.confidence))
+        if type(self.liveness_passed) is not bool:
+            raise TypeError("liveness_passed must be a boolean")
+        _require_hash(self.template_hash, "template_hash")
+
+    def canonical_payload(self) -> bytes:
+        """Return deterministic UTF-8 bytes for signing, excluding the signature."""
+        payload = asdict(self)
+        payload.pop("signature")
+        canonical = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        return canonical.encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -273,6 +334,10 @@ class ConsciousnessObserverMode:
         operator: str,
         short_memory_capacity: int = 64,
         checkpoint_interval: int = 8,
+        biometric_required: bool = False,
+        device_public_key: str | bytes | None = None,
+        biometric_min_confidence: float = 0.8,
+        max_biometric_ttl_seconds: int = 300,
     ) -> None:
         _require_non_empty(node_id, "node_id")
         _require_non_empty(session_id, "session_id")
@@ -290,11 +355,40 @@ class ConsciousnessObserverMode:
         ):
             raise ValueError("checkpoint_interval must be a positive integer")
 
+        if type(biometric_required) is not bool:
+            raise TypeError("biometric_required must be a boolean")
+        if isinstance(max_biometric_ttl_seconds, bool) or not isinstance(max_biometric_ttl_seconds, int) or max_biometric_ttl_seconds < 1:
+            raise ValueError("max_biometric_ttl_seconds must be a positive integer")
+        biometric_min_confidence = _coerce_confidence(biometric_min_confidence)
+        if biometric_required and device_public_key is None:
+            raise ValueError("device_public_key is required when biometric verification is enabled")
+        public_key: Ed25519PublicKey | None = None
+        if device_public_key is not None:
+            if not isinstance(device_public_key, (str, bytes)):
+                raise TypeError("device_public_key must be PEM text or bytes")
+            key_bytes = device_public_key.encode("utf-8") if isinstance(device_public_key, str) else device_public_key
+            try:
+                loaded_key = serialization.load_pem_public_key(key_bytes)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("device_public_key must be a valid PEM public key") from exc
+            if not isinstance(loaded_key, Ed25519PublicKey):
+                raise ValueError("device_public_key must be an Ed25519 public key")
+            public_key = loaded_key
+
         self.node_id = node_id
         self.session_id = session_id
         self.operator = operator
         self.short_memory_capacity = short_memory_capacity
         self.checkpoint_interval = checkpoint_interval
+        self.biometric_required = biometric_required
+        self.device_public_key = device_public_key
+        self._device_public_key = public_key
+        self.biometric_min_confidence = biometric_min_confidence
+        self.max_biometric_ttl_seconds = max_biometric_ttl_seconds
+        self._used_biometric_assertion_ids: set[str] = set()
+        self._used_biometric_nonces: set[str] = set()
+        self._revoked_biometric_assertion_ids: set[str] = set()
+        self._active_biometric_assertion: BiometricAssertion | None = None
 
         self.state = ObserverState.INACTIVE
         self.sequence = 0
@@ -315,6 +409,7 @@ class ConsciousnessObserverMode:
         ritual_name: str,
         ritual_version: str,
         consent_granted: bool,
+        biometric: BiometricAssertion | None = None,
     ) -> InformationLoopResult:
         with self._lock:
             if type(consent_granted) is not bool:
@@ -325,14 +420,74 @@ class ConsciousnessObserverMode:
                 raise ConsciousnessModeError("unsupported consciousness-mode ritual")
             if self.state not in {ObserverState.INACTIVE, ObserverState.SUSPENDED}:
                 raise ConsciousnessModeError(f"cannot activate from state {self.state}")
+            if self.biometric_required and biometric is None:
+                raise ConsciousnessModeError("biometric assertion required")
+            if biometric is not None:
+                self._verify_biometric(biometric)
+                if biometric.assertion_id in self._used_biometric_assertion_ids or biometric.nonce in self._used_biometric_nonces:
+                    raise ConsciousnessModeError("biometric assertion replay detected")
 
-            self.state = ObserverState.OBSERVING
-            self._last_loop_hash = self._hash_values(
-                self._last_loop_hash,
-                ritual_name,
-                ritual_version,
-                self.operator,
-            )
+            snapshot = self._capture_state()
+            previous_assertion = self._active_biometric_assertion
+            try:
+                self.state = ObserverState.OBSERVING
+                hash_inputs = [self._last_loop_hash, ritual_name, ritual_version, self.operator]
+                if biometric is not None:
+                    # Link the verification event without persisting a template-derived identifier.
+                    hash_inputs.extend(("BIOMETRIC_VERIFIED", biometric.assertion_id, biometric.method))
+                self._last_loop_hash = self._hash_values(*hash_inputs)
+                result = self.loop()
+            except Exception:
+                self._restore_state(snapshot)
+                self._active_biometric_assertion = previous_assertion
+                raise
+
+            if biometric is not None:
+                self._used_biometric_assertion_ids.add(biometric.assertion_id)
+                self._used_biometric_nonces.add(biometric.nonce)
+            self._active_biometric_assertion = biometric
+            return result
+
+    def _verify_biometric(self, assertion: BiometricAssertion) -> None:
+        """Verify a local assertion's signature, binding, freshness and policy."""
+        if not isinstance(assertion, BiometricAssertion):
+            raise TypeError("biometric must be a BiometricAssertion")
+        if assertion.node_id != self.node_id or assertion.operator != self.operator or assertion.session_id != self.session_id:
+            raise ConsciousnessModeError("biometric binding mismatch")
+        if assertion.assertion_id in self._revoked_biometric_assertion_ids:
+            raise ConsciousnessModeError("biometric assertion revoked")
+        if not assertion.liveness_passed:
+            raise ConsciousnessModeError("liveness check failed")
+        if assertion.confidence < self.biometric_min_confidence:
+            raise ConsciousnessModeError("biometric confidence below policy threshold")
+        issued = _parse_utc_timestamp(assertion.issued_at, "issued_at")
+        expires = _parse_utc_timestamp(assertion.expires_at, "expiry")
+        now = datetime.now(UTC)
+        if issued > now:
+            raise ConsciousnessModeError("biometric assertion issued in the future")
+        if expires <= issued:
+            raise ConsciousnessModeError("biometric assertion expiry must follow issue time")
+        if (expires - issued).total_seconds() > self.max_biometric_ttl_seconds:
+            raise ConsciousnessModeError("biometric assertion lifetime exceeds policy")
+        if expires <= now:
+            raise ConsciousnessModeError("biometric assertion expired")
+        if self._device_public_key is None:
+            raise ConsciousnessModeError("trusted biometric public key is not configured")
+        try:
+            signature = base64.b64decode(assertion.signature, validate=True)
+            self._device_public_key.verify(signature, assertion.canonical_payload())
+        except (binascii.Error, ValueError, TypeError, InvalidSignature) as exc:
+            raise ConsciousnessModeError("invalid biometric signature") from exc
+
+    def revoke_biometric_assertion(self, assertion_id: str) -> InformationLoopResult:
+        """Revoke an assertion for this observer instance and suspend if currently active."""
+        _require_non_empty(assertion_id, "assertion_id")
+        with self._lock:
+            self._revoked_biometric_assertion_ids.add(assertion_id)
+            if self._active_biometric_assertion is not None and self._active_biometric_assertion.assertion_id == assertion_id:
+                self._last_loop_hash = self._hash_values(self._last_loop_hash, "BIOMETRIC_ASSERTION_REVOKED", assertion_id)
+                self._active_biometric_assertion = None
+                self.state = ObserverState.SUSPENDED
             return self.loop()
 
     def observe(self, packet: InformationPacket) -> InformationLoopResult:
@@ -430,6 +585,12 @@ class ConsciousnessObserverMode:
                 raise TypeError("persistence_authorized must be a boolean")
             if not persistence_authorized:
                 raise ConsciousnessModeError("persistence authorization is required")
+            if self.biometric_required or self._active_biometric_assertion is not None:
+                if self._active_biometric_assertion is None:
+                    raise ConsciousnessModeError("biometric assertion required for checkpoint")
+                # Recheck expiry, revocation and signature at each checkpoint. The already-consumed
+                # nonce is intentionally not checked here; replay checks apply to new activations.
+                self._verify_biometric(self._active_biometric_assertion)
 
             created_at = datetime.now(UTC).isoformat()
             checkpoint_payload: dict[str, object] = {
@@ -516,6 +677,7 @@ class ConsciousnessObserverMode:
         with self._lock:
             self._require_active()
             self.state = ObserverState.SUSPENDED
+            self._active_biometric_assertion = None
             return self.loop()
 
     def signal(self) -> dict[str, object]:
@@ -533,6 +695,8 @@ class ConsciousnessObserverMode:
                 "unresolved_count": len(self._unresolved_packet_ids),
                 "relation_count": len(self._relations),
                 "relation_hashes": sorted(relation.canonical_hash() for relation in self._relations.values()),
+                "biometric_required": self.biometric_required,
+                "biometric_verified": self._active_biometric_assertion is not None,
                 "information_loop_hash": self._last_loop_hash,
                 "persistence_automatic": False,
                 "sentience_claim": False,
