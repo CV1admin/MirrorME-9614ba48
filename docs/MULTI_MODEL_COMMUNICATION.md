@@ -98,3 +98,13 @@ The bridge reads each local model's family, size and quantization from Ollama's 
 ### Phone access
 
 Run `python scripts/start_vireax.py --tailscale` on the computer that has the models, then open the printed link on a phone signed in to the same Tailscale account. The page detects that it was opened from another device and talks to the bridge on that computer, so no settings change is needed. The computer must stay on and awake. The bridge has no login; Tailscale limits who can reach it.
+
+### Critic panel
+
+Tick **Critic panel** on the chat page (or send `critic_lenses` and `synthesis: true` to `/api/vireax/converse`) to change the review rounds:
+
+- Round 1 is unchanged: every model answers alone.
+- In each review round, models take one lens each: **maths** (definitions, units, limiting cases, recomputable figures), **logic** (premises, validity, equivocation, hidden assumptions) or **devil's advocate** (strongest case against the leading view, edge cases). Model *i* gets lens *(i + round − 2) mod n*, so lenses rotate between rounds. With two models and two rounds, only the maths and logic lenses are used; the devil's advocate appears with a third model or a third round.
+- A final **synthesis** turn, written by the first selected model (or `synthesis_model`), labels each claim with a status, lists agreements, keeps every unresolved disagreement attributed rather than settling it by majority, and names the cheapest decisive next test. It is told it is not a neutral judge of its own earlier answers.
+
+Cost is `models × rounds + 1` calls. Lenses are prompts on the same models, so they widen what is checked but do not add independent evidence; the independence notes still apply. `converse()` now also rejects an adapter that returns a role other than the one it was asked for (part of audit F-05).

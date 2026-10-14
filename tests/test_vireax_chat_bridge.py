@@ -276,6 +276,37 @@ class VireaxChatBridgeTest(unittest.TestCase):
         self.assertTrue(CLOUD_CALLS[-1]["body"]["system"].startswith("You are VIREÁX"))
         self.assertNotIn("You are VIREÁX", json.dumps(data))
 
+    def test_critic_panel_with_synthesis(self) -> None:
+        status, _, data = self.request(
+            "POST", "/api/vireax/converse",
+            {
+                "task": "x", "models": ["alpha:1", "gamma:3"], "max_rounds": 2,
+                "critic_lenses": ["math", "adversary"], "synthesis": True,
+            },
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual([t["role"] for t in data["turns"]], [
+            "independent_analyst", "independent_analyst", "critic:math", "critic:adversary", "synthesis",
+        ])
+        self.assertEqual(data["synthesis_model"], "alpha:1")
+        self.assertEqual(data["model_calls"], 5)
+        self.assertEqual(data["turns"][-1]["round"], 3)
+
+    def test_invalid_panel_requests_are_rejected(self) -> None:
+        base = {"task": "x", "models": ["alpha:1", "gamma:3"], "max_rounds": 2}
+        cases = [
+            {"critic_lenses": ["physics"]},
+            {"critic_lenses": "math"},
+            {"critic_lenses": ["math", "math"]},
+            {"critic_lenses": ["math"], "max_rounds": 1},
+            {"synthesis": "yes"},
+            {"synthesis": True, "synthesis_model": "beta:2"},
+        ]
+        for extra in cases:
+            with self.subTest(extra=extra):
+                status, _, data = self.request("POST", "/api/vireax/converse", {**base, **extra})
+                self.assertEqual(status, 400, data)
+
     def test_disallowed_origin_is_blocked(self) -> None:
         status, _, _ = self.request(
             "POST", "/api/vireax/converse", {"task": "x"}, headers={"Origin": "https://evil.example"},

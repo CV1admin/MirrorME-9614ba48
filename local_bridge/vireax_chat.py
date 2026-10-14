@@ -30,7 +30,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from qviraex.vireax.adapters import AdapterSpec  # noqa: E402
 from qviraex.vireax.anthropic_adapter import ANTHROPIC_MESSAGES_ENDPOINT, AnthropicAdapter  # noqa: E402
-from qviraex.vireax.multi_model import converse  # noqa: E402
+from qviraex.vireax.multi_model import CRITIC_LENSES, converse  # noqa: E402
 from qviraex.vireax.openai_compatible_adapter import OpenAICompatibleAdapter  # noqa: E402
 from qviraex.vireax.router import ModelRouter  # noqa: E402
 from qviraex.vireax.system_prompt import load_vireax_system_prompt  # noqa: E402
@@ -197,6 +197,26 @@ def run_vireax_chat(
     if not isinstance(rounds, int) or isinstance(rounds, bool) or not 1 <= rounds <= 3:
         raise VireaxRequestError("max_rounds must be 1, 2 or 3")
     models = _validate_models(payload.get("models"), default_models)
+    lenses = payload.get("critic_lenses")
+    if lenses is not None:
+        if not isinstance(lenses, list) or not lenses or not all(isinstance(x, str) for x in lenses):
+            raise VireaxRequestError("critic_lenses must be a non-empty list")
+        if any(x not in CRITIC_LENSES for x in lenses) or len(set(lenses)) != len(lenses):
+            raise VireaxRequestError("critic_lenses must be distinct values from: " + ", ".join(CRITIC_LENSES))
+        if rounds < 2:
+            raise VireaxRequestError("critics need at least 2 rounds")
+    synthesis = payload.get("synthesis", False)
+    if not isinstance(synthesis, bool):
+        raise VireaxRequestError("synthesis must be true or false")
+    synthesis_model = None
+    if synthesis:
+        requested = payload.get("synthesis_model")
+        if requested is None:
+            synthesis_model = models[0]
+        elif isinstance(requested, str) and requested in models:
+            synthesis_model = requested
+        else:
+            raise VireaxRequestError("synthesis_model must be one of the selected models")
 
     cloud_selected = [catalog[m] for m in models if m in catalog]
     if cloud_selected:
@@ -224,6 +244,8 @@ def run_vireax_chat(
             max_rounds=rounds,
             max_output_chars=MAX_OUTPUT_CHARS,
             max_task_chars=MAX_TASK_CHARS,
+            critic_lenses=lenses,
+            synthesis_model=synthesis_model,
         )
     except (RuntimeError, ValueError) as exc:
         # Adapter errors are written to be safe to show (no secrets or bodies).
@@ -239,6 +261,9 @@ def run_vireax_chat(
         "providers": providers,
         "sent_to_cloud": sorted({c.provider.label for c in cloud_selected}),
         "max_rounds": rounds,
+        "critic_lenses": lenses or [],
+        "synthesis_model": synthesis_model,
+        "model_calls": len(models) * rounds + (1 if synthesis_model else 0),
         "system_prompt": {"version": prompt.version, "sha256": prompt.sha256},
         "independence": independence_report(models, catalog, details),
         "audit_head_hash": result.audit.head_hash,
