@@ -6,9 +6,25 @@ const LOOPBACK_DEFAULT = 'http://localhost:8765';
 const MAX_MODELS = 4;
 const MAX_TASK_CHARS = 20_000;
 
+interface CloudModelInfo {
+  id: string;
+  provider: string;
+  provider_label: string;
+  available: boolean;
+  key_env: string;
+}
+
+interface ModelsResponse {
+  models: string[];
+  ollama_error: string | null;
+  cloud_models: CloudModelInfo[];
+  default_models: string[];
+}
+
 interface Turn {
   round: number;
   model: string;
+  provider?: string;
   role: string;
   output: string;
   output_sha256: string;
@@ -20,6 +36,7 @@ interface ConverseResult {
   status: string;
   models: string[];
   max_rounds: number;
+  sent_to_cloud?: string[];
   audit_head_hash: string;
   turns: Turn[];
 }
@@ -82,6 +99,19 @@ const describeError = async (response: Response): Promise<string> => {
   }
 };
 
+const PROVIDER_LABELS: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' };
+
+const SourceBadge: React.FC<{ provider?: string }> = ({ provider }) =>
+  provider && provider !== 'ollama' ? (
+    <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full border border-violet-500/40 text-violet-300 bg-violet-500/10">
+      Cloud · {PROVIDER_LABELS[provider] ?? provider}
+    </span>
+  ) : (
+    <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full border border-slate-600 text-slate-400">
+      Local
+    </span>
+  );
+
 const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
   const independent = role === 'independent_analyst';
   return (
@@ -139,6 +169,7 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
                 <div className="flex flex-wrap items-center gap-2 mb-3">
                   <span className="font-mono text-sm font-bold text-slate-100 break-all">{turn.model}</span>
                   <RoleBadge role={turn.role} />
+                  <SourceBadge provider={turn.provider} />
                 </div>
                 <div className="text-sm text-slate-300 whitespace-pre-wrap break-words leading-relaxed">{turn.output}</div>
                 <p className="mt-3 font-mono text-[10px] text-slate-600" title={turn.output_sha256}>
@@ -154,6 +185,9 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 border-t border-slate-800 pt-3">
           <span className="text-amber-300/80 font-bold uppercase tracking-widest">{exchange.result.status}</span>
           <span>Model agreement is not verification.</span>
+          {!!exchange.result.sent_to_cloud?.length && (
+            <span className="text-violet-300/80">Sent to {exchange.result.sent_to_cloud.join(', ')}</span>
+          )}
           <span className="font-mono" title={exchange.result.audit_head_hash}>
             audit {shortHash(exchange.result.audit_head_hash)}
           </span>
@@ -167,6 +201,9 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
 const Vireax: React.FC = () => {
   const [endpoint] = useState(readBridgeEndpoint);
   const [installed, setInstalled] = useState<string[]>([]);
+  const [cloudModels, setCloudModels] = useState<CloudModelInfo[]>([]);
+  const [ollamaError, setOllamaError] = useState<string | null>(null);
+  const [cloudConsent, setCloudConsent] = useState(false);
   const [selected, setSelected] = useState<string[]>(() => readSelection()?.models ?? []);
   const [rounds, setRounds] = useState<number>(() => readSelection()?.rounds ?? 2);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
@@ -176,19 +213,33 @@ const Vireax: React.FC = () => {
   const [now, setNow] = useState(() => Date.now());
   const bottomRef = useRef<HTMLDivElement>(null);
   const busy = exchanges.some((e) => !e.result && !e.error);
+  const cloudProviders = useMemo(() => {
+    const labels = cloudModels.filter((m) => selected.includes(m.id)).map((m) => m.provider_label);
+    return [...new Set(labels)].sort();
+  }, [cloudModels, selected]);
+  const cloudKey = cloudProviders.join(',');
+
+  useEffect(() => {
+    // Consent covers a specific set of providers; ask again whenever it changes.
+    setCloudConsent(false);
+  }, [cloudKey]);
 
   const loadModels = useCallback(async () => {
     setLoadingModels(true);
     try {
       const response = await fetch(`${endpoint}/api/vireax/models`);
       if (!response.ok) throw new Error(await describeError(response));
-      const data = (await response.json()) as { models: string[]; default_models: string[] };
+      const data = (await response.json()) as ModelsResponse;
+      const cloud = data.cloud_models ?? [];
+      const usable = [...data.models, ...cloud.filter((m) => m.available).map((m) => m.id)];
       setInstalled(data.models);
+      setCloudModels(cloud);
+      setOllamaError(data.ollama_error ?? null);
       setSelected((current) => {
-        const kept = current.filter((m) => data.models.includes(m));
+        const kept = current.filter((m) => usable.includes(m));
         if (kept.length >= 2) return kept;
-        const defaults = data.default_models.filter((m) => data.models.includes(m));
-        return (defaults.length >= 2 ? defaults : data.models).slice(0, 2);
+        const defaults = data.default_models.filter((m) => usable.includes(m));
+        return (defaults.length >= 2 ? defaults : data.models.length >= 2 ? data.models : usable).slice(0, 2);
       });
       setBridgeError(null);
     } catch (error) {
@@ -244,7 +295,12 @@ const Vireax: React.FC = () => {
       const response = await fetch(`${endpoint}/api/vireax/converse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task, models: selected, max_rounds: rounds }),
+        body: JSON.stringify({
+          task,
+          models: selected,
+          max_rounds: rounds,
+          ...(cloudProviders.length ? { allow_cloud: cloudConsent } : {}),
+        }),
       });
       if (!response.ok) {
         finish({ error: await describeError(response) });
@@ -263,9 +319,36 @@ const Vireax: React.FC = () => {
     }
   };
 
-  const canSend = !busy && selected.length >= 2 && draft.trim().length > 0 && draft.length <= MAX_TASK_CHARS;
+  const needsConsent = cloudProviders.length > 0 && !cloudConsent;
+  const canSend =
+    !busy && !needsConsent && selected.length >= 2 && draft.trim().length > 0 && draft.length <= MAX_TASK_CHARS;
   const sendHint =
-    selected.length < 2 ? 'Pick at least two models' : busy ? 'Waiting for the models…' : 'Ctrl/⌘ + Enter to send';
+    selected.length < 2
+      ? 'Pick at least two models'
+      : needsConsent
+        ? `Tick the box to allow sending to ${cloudProviders.join(', ')}`
+        : busy
+          ? 'Waiting for the models…'
+          : 'Ctrl/⌘ + Enter to send';
+
+  const chip = (id: string, label: string, enabled: boolean, title?: string) => {
+    const on = selected.includes(id);
+    return (
+      <button
+        key={id}
+        type="button"
+        aria-pressed={on}
+        title={title}
+        onClick={() => toggleModel(id)}
+        disabled={busy || !enabled || (!on && selected.length >= MAX_MODELS)}
+        className={`px-3 py-1.5 rounded-full border font-mono text-xs transition-colors disabled:opacity-40 ${
+          on ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-slate-500'
+        }`}
+      >
+        {label}
+      </button>
+    );
+  };
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto flex flex-col gap-5 min-h-full">
@@ -274,8 +357,8 @@ const Vireax: React.FC = () => {
           <p className="text-xs uppercase tracking-[0.3em] text-cyan-500 font-bold">Bounded multi-model review</p>
           <h2 className="text-2xl sm:text-3xl font-black text-slate-100 mt-2">VIREAX Chat</h2>
           <p className="text-sm text-slate-400 mt-2 max-w-3xl">
-            Ask once. Each model answers alone, then reviews the others. Runs on your own machine through the local bridge;
-            nothing is sent to cloud models. Each question is a fresh session.
+            Ask once. Each model answers alone, then reviews the others. Local models run on your own machine through the
+            bridge; cloud models are used only when you allow it. Each question is a fresh session.
           </p>
         </div>
         <button
@@ -307,29 +390,26 @@ const Vireax: React.FC = () => {
       ) : (
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs uppercase tracking-widest text-slate-500 font-bold mr-1">Models</span>
+            <span className="text-xs uppercase tracking-widest text-slate-500 font-bold mr-1 w-14">Local</span>
             {installed.length === 0 && !loadingModels && (
-              <span className="text-sm text-slate-400">No Ollama models found. Pull some with `ollama pull`.</span>
+              <span className="text-sm text-slate-400">
+                {ollamaError ? `Ollama not reachable (${ollamaError}).` : 'No Ollama models found. Pull some with `ollama pull`.'}
+              </span>
             )}
-            {installed.map((model) => {
-              const on = selected.includes(model);
-              return (
-                <button
-                  key={model}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => toggleModel(model)}
-                  disabled={busy || (!on && selected.length >= MAX_MODELS)}
-                  className={`px-3 py-1.5 rounded-full border font-mono text-xs transition-colors disabled:opacity-40 ${
-                    on
-                      ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200'
-                      : 'border-slate-700 text-slate-400 hover:border-slate-500'
-                  }`}
-                >
-                  {model}
-                </button>
-              );
-            })}
+            {installed.map((model) => chip(model, model, true))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs uppercase tracking-widest text-violet-400/80 font-bold mr-1 w-14">Cloud</span>
+            {cloudModels.length === 0 && (
+              <span className="text-xs text-slate-500">
+                None configured. Set ANTHROPIC_API_KEY before starting the bridge, or add{' '}
+                <code className="font-mono">--cloud-model openai/MODEL</code> /{' '}
+                <code className="font-mono">gemini/MODEL</code>.
+              </span>
+            )}
+            {cloudModels.map((m) =>
+              chip(m.id, m.id, m.available, m.available ? `${m.provider_label}` : `Set ${m.key_env} on the bridge`),
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs uppercase tracking-widest text-slate-500 font-bold mr-1">Rounds</span>
@@ -351,6 +431,21 @@ const Vireax: React.FC = () => {
               {selected.length} models × {rounds} rounds = {selected.length * rounds} calls
             </span>
           </div>
+          {cloudProviders.length > 0 && (
+            <label className="flex items-start gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cloudConsent}
+                onChange={(event) => setCloudConsent(event.target.checked)}
+                disabled={busy}
+                className="mt-0.5 h-4 w-4 accent-violet-400"
+              />
+              <span>
+                Send my questions, and the other models' answers, to <strong>{cloudProviders.join(', ')}</strong>. Their
+                terms and data policies apply, and calls are billed to your API keys.
+              </span>
+            </label>
+          )}
         </section>
       )}
 

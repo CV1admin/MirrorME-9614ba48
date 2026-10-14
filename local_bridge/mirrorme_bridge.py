@@ -21,7 +21,9 @@ Intelligence pipeline stub (hard rules #1–#5):
 VIREAX multi-model chat:
     GET  /api/vireax/models
     POST /api/vireax/converse
-    Body: { task, models?: [name, ...], max_rounds?: 1-3 }
+    Body: { task, models?: [name, ...], max_rounds?: 1-3, allow_cloud?: true }
+    Cloud models (Anthropic, OpenAI, Gemini) come only from --cloud-model and keys
+    in this process's environment; cloud calls require allow_cloud: true.
 
 The handshake is local session confirmation. It is not cryptographic proof of legal
 identity and must not be represented as consciousness, biometric verification, or
@@ -56,6 +58,8 @@ try:
     from vireax_chat import (
         VireaxModelError,
         VireaxRequestError,
+        build_cloud_catalog,
+        describe_cloud_catalog,
         list_ollama_models,
         run_vireax_chat,
     )
@@ -413,24 +417,19 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
         if run_vireax_chat is None:
             self._send_json(503, {"ok": False, "error": "vireax_unavailable"})
             return
+        ollama_error = None
         try:
             models = list_ollama_models(self.server.ollama_url)  # type: ignore[attr-defined]
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            self._send_json(
-                502,
-                {
-                    "ok": False,
-                    "error": "ollama_unreachable",
-                    "detail": str(getattr(exc, "reason", exc)),
-                    "hint": "Start Ollama with `ollama serve`.",
-                },
-            )
-            return
+            models = []
+            ollama_error = str(getattr(exc, "reason", exc))
         self._send_json(
             200,
             {
                 "ok": True,
                 "models": models,
+                "ollama_error": ollama_error,
+                "cloud_models": describe_cloud_catalog(getattr(self.server, "vireax_cloud_catalog", {})),
                 "default_models": list(getattr(self.server, "vireax_models", [])),
             },
         )
@@ -444,6 +443,7 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
                 payload,
                 ollama_url=self.server.ollama_url,  # type: ignore[attr-defined]
                 default_models=getattr(self.server, "vireax_models", []),
+                cloud_catalog=getattr(self.server, "vireax_cloud_catalog", {}),
             )
         except VireaxRequestError as exc:
             self._send_json(400, {"ok": False, "error": "invalid_request", "detail": str(exc)})
@@ -455,7 +455,7 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
                     "ok": False,
                     "error": "model_call_failed",
                     "detail": str(exc),
-                    "hint": "Check that Ollama is running and every selected model is pulled.",
+                    "hint": "Check that Ollama is running, local models are pulled, and cloud model IDs are valid.",
                 },
             )
             return
@@ -509,9 +509,25 @@ def main() -> None:
         "--vireax-model",
         action="append",
         dest="vireax_models",
-        help="Default Ollama model for VIREAX chat; repeat for each model (at least two).",
+        help="Default model for VIREAX chat (Ollama name or provider/model); repeat for each.",
+    )
+    parser.add_argument(
+        "--cloud-model",
+        action="append",
+        dest="cloud_models",
+        help=(
+            "Offer a cloud model in VIREAX chat as provider/model, provider one of "
+            "anthropic, openai, gemini. Keys come from ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+            "GEMINI_API_KEY. Repeatable."
+        ),
     )
     args = parser.parse_args()
+    cloud_catalog = {}
+    if run_vireax_chat is not None:
+        try:
+            cloud_catalog = build_cloud_catalog(args.cloud_models or [])
+        except ValueError as exc:
+            parser.error(str(exc))
 
     server = ThreadingHTTPServer((args.host, args.port), MirrorMeBridgeHandler)
     server.ollama_url = args.ollama_url  # type: ignore[attr-defined]
@@ -520,6 +536,7 @@ def main() -> None:
     server.allowed_origins = set(args.allowed_origins or DEFAULT_ALLOWED_ORIGINS)  # type: ignore[attr-defined]
     server.handshake_sessions = {}  # type: ignore[attr-defined]
     server.vireax_models = list(args.vireax_models or [])  # type: ignore[attr-defined]
+    server.vireax_cloud_catalog = cloud_catalog  # type: ignore[attr-defined]
 
     print(f"MirrorME local bridge running at http://{args.host}:{args.port}")
     print(f"Proxy target: {args.ollama_url}/api/chat")
@@ -527,6 +544,10 @@ def main() -> None:
     print(f"Operator: {args.operator}")
     print(f"Handshake protocol: {HANDSHAKE_PROTOCOL_VERSION}")
     print(f"Allowed browser origins: {', '.join(sorted(server.allowed_origins))}")
+    if cloud_catalog:
+        for entry in describe_cloud_catalog(cloud_catalog):
+            state = "ready" if entry["available"] else f"needs {entry['key_env']}"
+            print(f"Cloud model: {entry['id']} ({state})")
     server.serve_forever()
 
 
