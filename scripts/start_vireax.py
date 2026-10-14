@@ -33,6 +33,9 @@ HOSTED_SITE = "https://cv1admin.github.io"
 
 def tailscale_ip() -> str:
     exe = shutil.which("tailscale")
+    if not exe and os.name == "nt":
+        default = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tailscale" / "tailscale.exe"
+        exe = str(default) if default.exists() else None
     if not exe:
         sys.exit("Tailscale isn't installed or isn't on PATH. Install it, sign in, and try again.")
     try:
