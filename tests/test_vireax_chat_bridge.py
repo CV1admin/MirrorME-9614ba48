@@ -2,13 +2,22 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
 
 from local_bridge.mirrorme_bridge import DEFAULT_ALLOWED_ORIGINS, DEFAULT_MODEL, MirrorMeBridgeHandler
+from local_bridge.vireax_chat import (
+    CLOUD_PROVIDERS,
+    CloudModel,
+    CloudProvider,
+    build_cloud_catalog,
+)
 
 INSTALLED = ["alpha:1", "beta:2", "gamma:3"]
+CLOUD_CALLS: list[dict] = []
 
 
 class FakeOllamaHandler(BaseHTTPRequestHandler):
@@ -23,6 +32,15 @@ class FakeOllamaHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         model = body["model"]
+        if self.path == "/v1/messages":  # fake Anthropic
+            CLOUD_CALLS.append({"path": self.path, "key": self.headers.get("x-api-key"), "body": body})
+            peers = "Prior contributions" in body["messages"][0]["content"]
+            self._json(200, {"id": "msg", "content": [{"type": "text", "text": f"{model} cloud (saw peers: {peers})"}]})
+            return
+        if self.path == "/openai/chat/completions":  # fake OpenAI-compatible cloud
+            CLOUD_CALLS.append({"path": self.path, "key": self.headers.get("Authorization"), "body": body})
+            self._json(200, {"choices": [{"message": {"content": f"{model} cloud"}}]})
+            return
         if self.path != "/v1/chat/completions" or model not in INSTALLED:
             self._json(404, {"error": "model not found"})
             return
@@ -63,6 +81,14 @@ class VireaxChatBridgeTest(unittest.TestCase):
         cls.bridge.allowed_origins = set(DEFAULT_ALLOWED_ORIGINS) | {"https://cv1admin.github.io"}
         cls.bridge.handshake_sessions = {}
         cls.bridge.vireax_models = ["alpha:1", "beta:2"]
+        fake = f"http://127.0.0.1:{cls.ollama.server_address[1]}"
+        claude = CloudProvider("anthropic", "Anthropic", "anthropic", f"{fake}/v1/messages", "TEST_ANTHROPIC_KEY")
+        gpt = CloudProvider("openai", "OpenAI", "openai", f"{fake}/openai/chat/completions", "TEST_OPENAI_KEY",
+                            max_tokens_field="max_completion_tokens")
+        cls.bridge.vireax_cloud_catalog = {
+            "anthropic/claude-test": CloudModel("anthropic/claude-test", claude, "claude-test"),
+            "openai/gpt-test": CloudModel("openai/gpt-test", gpt, "gpt-test"),
+        }
         _start(cls.bridge)
 
     @classmethod
@@ -132,6 +158,72 @@ class VireaxChatBridgeTest(unittest.TestCase):
         self.assertEqual(status, 502)
         self.assertEqual(data["error"], "model_call_failed")
 
+    def test_cloud_models_listed_without_keys_or_endpoints(self) -> None:
+        with mock.patch.dict(os.environ, {"TEST_ANTHROPIC_KEY": "sk-secret"}):
+            status, _, data = self.request("GET", "/api/vireax/models")
+        self.assertEqual(status, 200)
+        listed = {m["id"]: m for m in data["cloud_models"]}
+        self.assertTrue(listed["anthropic/claude-test"]["available"])
+        self.assertFalse(listed["openai/gpt-test"]["available"])
+        serialized = json.dumps(data)
+        self.assertNotIn("sk-secret", serialized)
+        self.assertNotIn("/v1/messages", serialized)
+
+    def test_cloud_requires_explicit_consent_before_any_call(self) -> None:
+        CLOUD_CALLS.clear()
+        with mock.patch.dict(os.environ, {"TEST_ANTHROPIC_KEY": "sk-secret"}):
+            status, _, data = self.request(
+                "POST", "/api/vireax/converse",
+                {"task": "private", "models": ["alpha:1", "anthropic/claude-test"], "max_rounds": 1},
+            )
+        self.assertEqual(status, 400)
+        self.assertIn("cloud_consent_required", data["detail"])
+        self.assertIn("Anthropic", data["detail"])
+        self.assertEqual(CLOUD_CALLS, [])
+
+    def test_cloud_key_missing_is_reported_before_any_call(self) -> None:
+        CLOUD_CALLS.clear()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            status, _, data = self.request(
+                "POST", "/api/vireax/converse",
+                {"task": "x", "models": ["alpha:1", "openai/gpt-test"], "max_rounds": 1, "allow_cloud": True},
+            )
+        self.assertEqual(status, 400)
+        self.assertIn("TEST_OPENAI_KEY", data["detail"])
+        self.assertEqual(CLOUD_CALLS, [])
+
+    def test_mixed_local_and_cloud_conversation(self) -> None:
+        CLOUD_CALLS.clear()
+        env = {"TEST_ANTHROPIC_KEY": "sk-ant", "TEST_OPENAI_KEY": "sk-oai"}
+        with mock.patch.dict(os.environ, env):
+            status, _, data = self.request(
+                "POST", "/api/vireax/converse",
+                {
+                    "task": "Is the claim sound?",
+                    "models": ["alpha:1", "anthropic/claude-test", "openai/gpt-test"],
+                    "max_rounds": 2,
+                    "allow_cloud": True,
+                },
+            )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["sent_to_cloud"], ["Anthropic", "OpenAI"])
+        self.assertEqual(
+            data["providers"],
+            {"alpha:1": "ollama", "anthropic/claude-test": "anthropic", "openai/gpt-test": "openai"},
+        )
+        self.assertEqual(len(data["turns"]), 6)
+        self.assertEqual([t["provider"] for t in data["turns"][:3]], ["ollama", "anthropic", "openai"])
+        self.assertIn("saw peers: False", data["turns"][1]["output"])
+        self.assertIn("saw peers: True", data["turns"][4]["output"])
+        anthropic_calls = [c for c in CLOUD_CALLS if c["path"] == "/v1/messages"]
+        openai_calls = [c for c in CLOUD_CALLS if c["path"] == "/openai/chat/completions"]
+        self.assertEqual(len(anthropic_calls), 2)
+        self.assertEqual(anthropic_calls[0]["key"], "sk-ant")
+        self.assertEqual(anthropic_calls[0]["body"]["model"], "claude-test")
+        self.assertEqual(openai_calls[0]["key"], "Bearer sk-oai")
+        self.assertEqual(openai_calls[0]["body"]["max_completion_tokens"], 2048)
+        self.assertNotIn("sk-ant", json.dumps(data))
+
     def test_disallowed_origin_is_blocked(self) -> None:
         status, _, _ = self.request(
             "POST", "/api/vireax/converse", {"task": "x"}, headers={"Origin": "https://evil.example"},
@@ -146,6 +238,28 @@ class VireaxChatBridgeTest(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertEqual(headers.get("Access-Control-Allow-Private-Network"), "true")
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "https://cv1admin.github.io")
+
+
+class CloudCatalogTests(unittest.TestCase):
+    def test_anthropic_defaults_offered_only_with_key(self) -> None:
+        self.assertEqual(build_cloud_catalog([], environ={}), {})
+        catalog = build_cloud_catalog([], environ={"ANTHROPIC_API_KEY": "k"})
+        self.assertEqual(sorted(catalog), ["anthropic/claude-haiku-5-5", "anthropic/claude-sonnet-5-5"])
+        self.assertIs(catalog["anthropic/claude-sonnet-5-5"].provider, CLOUD_PROVIDERS["anthropic"])
+
+    def test_listed_models_replace_defaults_for_that_provider(self) -> None:
+        catalog = build_cloud_catalog(
+            ["anthropic/claude-opus-5-5", "openai/gpt-x", "gemini/gemini-x"],
+            environ={"ANTHROPIC_API_KEY": "k"},
+        )
+        self.assertEqual(sorted(catalog), ["anthropic/claude-opus-5-5", "gemini/gemini-x", "openai/gpt-x"])
+        self.assertEqual(catalog["openai/gpt-x"].api_model, "gpt-x")
+
+    def test_invalid_entries_rejected(self) -> None:
+        for entry in ("gpt-x", "azure/gpt-x", "openai/", "openai/bad name"):
+            with self.subTest(entry=entry):
+                with self.assertRaises(ValueError):
+                    build_cloud_catalog([entry], environ={})
 
 
 if __name__ == "__main__":

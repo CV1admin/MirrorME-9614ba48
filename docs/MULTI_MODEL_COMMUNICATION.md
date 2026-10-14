@@ -42,7 +42,7 @@ The audit hash chain helps detect changes relative to a trusted record but does 
 
 ## Chat window
 
-The web app's **VIREAX Chat** page (`/#/vireax`) runs `converse()` through the local bridge against your own Ollama models. Nothing goes to a cloud model.
+The web app's **VIREAX Chat** page (`/#/vireax`) runs `converse()` through the local bridge against your own Ollama models and, optionally, cloud models. Nothing goes to a cloud model unless you configure one and tick the consent box for that question's providers.
 
 1. Start Ollama and pull at least two models.
 2. Start the bridge with default models:
@@ -55,3 +55,32 @@ The web app's **VIREAX Chat** page (`/#/vireax`) runs `converse()` through the l
 3. Open the page, pick two to four models and one to three rounds, and ask.
 
 Bridge routes: `GET /api/vireax/models` lists installed Ollama models; `POST /api/vireax/converse` takes `{ task, models?, max_rounds? }`. The browser may choose model names but never the endpoint, which stays the bridge's configured Ollama URL. Tasks are capped at 20,000 characters and each output at 8,000. Every result is `completed_unverified`, and each question is a fresh session with no memory of earlier ones.
+
+### Cloud models
+
+The bridge can offer Anthropic, OpenAI and Google Gemini models next to Ollama models in the same conversation.
+
+| Provider | Key variable | Models offered |
+| --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-5-5` and `claude-haiku-5-5` by default once the key is set, or the ones you list |
+| OpenAI | `OPENAI_API_KEY` | only those you list, e.g. `--cloud-model openai/MODEL` |
+| Google Gemini | `GEMINI_API_KEY` | only those you list, e.g. `--cloud-model gemini/MODEL` |
+
+```bash
+export ANTHROPIC_API_KEY=...        # keys live only in the bridge's environment
+export OPENAI_API_KEY=...
+python local_bridge/mirrorme_bridge.py \
+  --vireax-model mkultra:0.3 \
+  --cloud-model anthropic/claude-opus-5-5 \
+  --cloud-model openai/MODEL
+```
+
+Listing models for a provider replaces its defaults. An unknown provider or malformed entry stops the bridge at start-up.
+
+Safety rules:
+
+- Endpoints are fixed in `local_bridge/vireax_chat.py`; the browser sends only model identifiers such as `anthropic/claude-sonnet-5-5`.
+- Keys are read from the bridge's environment and never returned to the browser. `GET /api/vireax/models` reports only whether each cloud model is ready and which variable it needs.
+- A request containing any cloud model must include `allow_cloud: true`. The page asks for this with a checkbox naming the providers, and asks again whenever that set changes. Without it, or without the key, the bridge refuses before any model is called.
+- Cloud calls are capped at 2,048 output tokens each, at most 4 models × 3 rounds = 12 calls per question. Cost is billed to your keys.
+- Cloud providers see the question and, in review rounds, the other models' answers, including local ones.

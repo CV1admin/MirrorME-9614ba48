@@ -33,6 +33,8 @@ class OpenAICompatibleAdapter:
         timeout_seconds: float = 20.0,
         max_response_bytes: int = 1_000_000,
         max_prompt_chars: int = 100_000,
+        max_output_tokens: int | None = None,
+        max_tokens_field: str = "max_tokens",
     ) -> None:
         parsed = urlparse(endpoint)
         local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -48,6 +50,10 @@ class OpenAICompatibleAdapter:
             raise ValueError("max_response_bytes must be between 1 and 10,000,000")
         if not 1 <= max_prompt_chars <= 1_000_000:
             raise ValueError("max_prompt_chars must be between 1 and 1,000,000")
+        if max_output_tokens is not None and not 1 <= max_output_tokens <= 32_000:
+            raise ValueError("max_output_tokens must be between 1 and 32,000")
+        if max_tokens_field not in {"max_tokens", "max_completion_tokens"}:
+            raise ValueError("max_tokens_field must be max_tokens or max_completion_tokens")
         if not spec.enabled:
             raise ValueError("cannot initialize a disabled model adapter")
 
@@ -58,6 +64,8 @@ class OpenAICompatibleAdapter:
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
         self.max_prompt_chars = max_prompt_chars
+        self.max_output_tokens = max_output_tokens
+        self.max_tokens_field = max_tokens_field
         self._opener = urllib.request.build_opener(_NoRedirectHandler())
 
     def respond(self, envelope: AdapterEnvelope) -> AdapterResult:
@@ -80,6 +88,8 @@ class OpenAICompatibleAdapter:
                 {"role": "user", "content": envelope.prompt},
             ],
         }
+        if self.max_output_tokens is not None:
+            payload[self.max_tokens_field] = self.max_output_tokens
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key_env:
             secret = os.environ.get(self.api_key_env)

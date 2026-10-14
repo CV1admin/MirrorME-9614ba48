@@ -114,6 +114,7 @@ jobs:
         run: |
           python -m unittest qviraex.vireax.tests.test_multi_model -v
           python -m unittest qviraex.vireax.tests.test_openai_compatible_adapter -v
+          python -m unittest qviraex.vireax.tests.test_anthropic_adapter -v
 
       - name: Upload Python test report
         if: always()

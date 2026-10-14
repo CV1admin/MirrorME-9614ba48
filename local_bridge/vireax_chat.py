@@ -1,25 +1,35 @@
 """VIREAX multi-model chat for the local MirrorME bridge.
 
-Routes a task through two or more local Ollama models using VIREAX's bounded
-review (``qviraex.vireax.multi_model.converse``). Every model call goes to the
-bridge's configured Ollama URL; the browser can choose model names but never
-the endpoint. Results are always ``completed_unverified``: model agreement is
-not verification.
+Routes a task through two or more models using VIREAX's bounded review
+(``qviraex.vireax.multi_model.converse``). Models are either local Ollama models
+or cloud models (Anthropic, OpenAI, Google Gemini) from a catalog the operator
+configures when starting the bridge.
+
+Trust boundaries:
+- The browser chooses model identifiers, never endpoints or credentials.
+- Cloud endpoints are fixed below; API keys are read from the bridge's own
+  environment and are never returned to the browser.
+- A request that includes any cloud model must carry ``allow_cloud: true``,
+  the operator's explicit consent to send the task to that provider.
+- Results are always ``completed_unverified``: model agreement is not verification.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from qviraex.vireax.adapters import AdapterSpec  # noqa: E402
+from qviraex.vireax.anthropic_adapter import ANTHROPIC_MESSAGES_ENDPOINT, AnthropicAdapter  # noqa: E402
 from qviraex.vireax.multi_model import converse  # noqa: E402
 from qviraex.vireax.openai_compatible_adapter import OpenAICompatibleAdapter  # noqa: E402
 from qviraex.vireax.router import ModelRouter  # noqa: E402
@@ -29,7 +39,48 @@ MAX_OUTPUT_CHARS = 8_000
 MAX_CHAT_MODELS = 4
 DEFAULT_ROUNDS = 2
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
+CLOUD_MAX_OUTPUT_TOKENS = 2_048
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+
+
+@dataclass(frozen=True)
+class CloudProvider:
+    key: str
+    label: str
+    kind: str  # "anthropic" or "openai" (OpenAI-compatible chat completions)
+    endpoint: str
+    key_env: str
+    max_tokens_field: str = "max_tokens"
+
+
+CLOUD_PROVIDERS: dict[str, CloudProvider] = {
+    "anthropic": CloudProvider(
+        "anthropic", "Anthropic", "anthropic", ANTHROPIC_MESSAGES_ENDPOINT, "ANTHROPIC_API_KEY",
+    ),
+    "openai": CloudProvider(
+        "openai", "OpenAI", "openai", "https://api.openai.com/v1/chat/completions",
+        "OPENAI_API_KEY", max_tokens_field="max_completion_tokens",
+    ),
+    "gemini": CloudProvider(
+        "gemini", "Google Gemini", "openai",
+        "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "GEMINI_API_KEY",
+    ),
+}
+# Offered automatically when the provider's key is set and the operator lists no
+# models for it. Other providers' model IDs change often, so they are opt-in.
+DEFAULT_CLOUD_MODELS: dict[str, tuple[str, ...]] = {
+    "anthropic": ("claude-sonnet-5-5", "claude-haiku-5-5"),
+}
+
+
+@dataclass(frozen=True)
+class CloudModel:
+    id: str  # "provider/api-model", what the browser sends
+    provider: CloudProvider
+    api_model: str
+
+    def available(self, environ: Mapping[str, str]) -> bool:
+        return bool(environ.get(self.provider.key_env))
 
 
 class VireaxRequestError(ValueError):
@@ -37,7 +88,41 @@ class VireaxRequestError(ValueError):
 
 
 class VireaxModelError(RuntimeError):
-    """A local model call failed (HTTP 502)."""
+    """A model call failed (HTTP 502)."""
+
+
+def build_cloud_catalog(
+    entries: Sequence[str],
+    environ: Mapping[str, str] | None = None,
+) -> dict[str, CloudModel]:
+    """Build the operator's cloud catalog from ``provider/model`` entries.
+
+    Raises ValueError for an unknown provider or malformed entry, so a typo stops
+    the bridge at start-up instead of failing silently later.
+    """
+    env = os.environ if environ is None else environ
+    catalog: dict[str, CloudModel] = {}
+    listed: set[str] = set()
+    for entry in entries:
+        provider_key, sep, api_model = entry.strip().partition("/")
+        if not sep or not api_model or provider_key not in CLOUD_PROVIDERS:
+            raise ValueError(
+                f"cloud model must be provider/model with provider one of "
+                f"{', '.join(CLOUD_PROVIDERS)}: {entry!r}"
+            )
+        if not _MODEL_NAME.match(api_model):
+            raise ValueError(f"invalid cloud model name: {entry!r}")
+        listed.add(provider_key)
+        model_id = f"{provider_key}/{api_model}"
+        catalog[model_id] = CloudModel(model_id, CLOUD_PROVIDERS[provider_key], api_model)
+    for provider_key, models in DEFAULT_CLOUD_MODELS.items():
+        provider = CLOUD_PROVIDERS[provider_key]
+        if provider_key in listed or not env.get(provider.key_env):
+            continue
+        for api_model in models:
+            model_id = f"{provider_key}/{api_model}"
+            catalog[model_id] = CloudModel(model_id, provider, api_model)
+    return catalog
 
 
 def _validate_models(raw: Any, fallback: Sequence[str]) -> list[str]:
@@ -57,13 +142,46 @@ def _validate_models(raw: Any, fallback: Sequence[str]) -> list[str]:
     return models
 
 
+def _make_adapter(name: str, cloud: CloudModel | None, ollama_url: str) -> Any:
+    if cloud is None:
+        return OpenAICompatibleAdapter(
+            AdapterSpec(model=name, provider="ollama", role="analyst"),
+            endpoint=ollama_url.rstrip("/") + "/v1/chat/completions",
+            api_model=name,
+            timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
+        )
+    spec = AdapterSpec(model=name, provider=cloud.provider.key, role="analyst")
+    if cloud.provider.kind == "anthropic":
+        return AnthropicAdapter(
+            spec,
+            api_model=cloud.api_model,
+            api_key_env=cloud.provider.key_env,
+            endpoint=cloud.provider.endpoint,
+            max_output_tokens=CLOUD_MAX_OUTPUT_TOKENS,
+            timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
+        )
+    return OpenAICompatibleAdapter(
+        spec,
+        endpoint=cloud.provider.endpoint,
+        api_model=cloud.api_model,
+        api_key_env=cloud.provider.key_env,
+        timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
+        max_output_tokens=CLOUD_MAX_OUTPUT_TOKENS,
+        max_tokens_field=cloud.provider.max_tokens_field,
+    )
+
+
 def run_vireax_chat(
     payload: dict[str, Any],
     *,
     ollama_url: str,
     default_models: Sequence[str] = (),
+    cloud_catalog: Mapping[str, CloudModel] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run one bounded VIREAX conversation and return a JSON-safe result."""
+    env = os.environ if environ is None else environ
+    catalog = cloud_catalog or {}
     if not isinstance(payload, dict):
         raise VireaxRequestError("request body must be a JSON object")
     task = payload.get("task")
@@ -76,17 +194,20 @@ def run_vireax_chat(
         raise VireaxRequestError("max_rounds must be 1, 2 or 3")
     models = _validate_models(payload.get("models"), default_models)
 
-    endpoint = ollama_url.rstrip("/") + "/v1/chat/completions"
+    cloud_selected = [catalog[m] for m in models if m in catalog]
+    if cloud_selected:
+        if payload.get("allow_cloud") is not True:
+            providers = sorted({c.provider.label for c in cloud_selected})
+            raise VireaxRequestError(
+                "cloud_consent_required: confirm sending this task to " + ", ".join(providers)
+            )
+        missing = sorted({c.provider.key_env for c in cloud_selected if not c.available(env)})
+        if missing:
+            raise VireaxRequestError("API key not set on the bridge: " + ", ".join(missing))
+
     router = ModelRouter()
     for name in models:
-        router.register(
-            OpenAICompatibleAdapter(
-                AdapterSpec(model=name, provider="ollama", role="analyst"),
-                endpoint=endpoint,
-                api_model=name,
-                timeout_seconds=MODEL_CALL_TIMEOUT_SECONDS,
-            )
-        )
+        router.register(_make_adapter(name, catalog.get(name), ollama_url))
 
     try:
         result = converse(
@@ -101,18 +222,22 @@ def run_vireax_chat(
         # Adapter errors are written to be safe to show (no secrets or bodies).
         raise VireaxModelError(str(exc)) from None
 
+    providers = {name: (catalog[name].provider.key if name in catalog else "ollama") for name in models}
     return {
         "ok": True,
         "session_id": result.session_id,
         "task_id": result.task_id,
         "status": result.status,
         "models": models,
+        "providers": providers,
+        "sent_to_cloud": sorted({c.provider.label for c in cloud_selected}),
         "max_rounds": rounds,
         "audit_head_hash": result.audit.head_hash,
         "turns": [
             {
                 "round": turn.round_number,
                 "model": turn.model,
+                "provider": providers.get(turn.model, "ollama"),
                 "role": turn.role,
                 "output": turn.output,
                 "output_sha256": turn.output_sha256,
@@ -129,3 +254,21 @@ def list_ollama_models(ollama_url: str, timeout_seconds: float = 5.0) -> list[st
         data = json.loads(response.read(1_000_000).decode("utf-8"))
     names = [m.get("name") for m in data.get("models", []) if isinstance(m, dict)]
     return sorted(n for n in names if isinstance(n, str) and _MODEL_NAME.match(n))
+
+
+def describe_cloud_catalog(
+    catalog: Mapping[str, CloudModel],
+    environ: Mapping[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """Browser-safe view of the cloud catalog: never includes keys or endpoints."""
+    env = os.environ if environ is None else environ
+    return [
+        {
+            "id": model.id,
+            "provider": model.provider.key,
+            "provider_label": model.provider.label,
+            "available": model.available(env),
+            "key_env": model.provider.key_env,
+        }
+        for model in sorted(catalog.values(), key=lambda m: m.id)
+    ]
