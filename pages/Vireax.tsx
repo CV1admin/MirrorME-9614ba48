@@ -45,6 +45,9 @@ interface ConverseResult {
   models: string[];
   max_rounds: number;
   sent_to_cloud?: string[];
+  critic_lenses?: string[];
+  synthesis_model?: string | null;
+  model_calls?: number;
   system_prompt?: { version: string; sha256: string };
   independence?: { same_base_groups: string[][]; notes: string[] };
   audit_head_hash: string;
@@ -74,14 +77,14 @@ const readBridgeEndpoint = (): string => {
   return resolveBridgeEndpoint(stored, window.location);
 };
 
-const readSelection = (): { models: string[]; rounds: number } | null => {
+const readSelection = (): { models: string[]; rounds: number; panel: boolean } | null => {
   try {
     const raw = window.localStorage.getItem(SELECTION_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as { models?: unknown; rounds?: unknown };
+    const parsed = JSON.parse(raw) as { models?: unknown; rounds?: unknown; panel?: unknown };
     const models = Array.isArray(parsed.models) ? parsed.models.filter((m): m is string => typeof m === 'string') : [];
     const rounds = typeof parsed.rounds === 'number' && parsed.rounds >= 1 && parsed.rounds <= 3 ? parsed.rounds : 2;
-    return { models, rounds };
+    return { models, rounds, panel: parsed.panel === true };
   } catch {
     return null;
   }
@@ -122,17 +125,40 @@ const SourceBadge: React.FC<{ provider?: string }> = ({ provider }) =>
     </span>
   );
 
+const LENS_LABELS: Record<string, string> = {
+  math: 'Maths critic',
+  logic: 'Logic critic',
+  adversary: "Devil's advocate",
+};
+
+const roleStyle = (role: string): { label: string; className: string } => {
+  if (role === 'independent_analyst') {
+    return { label: 'Independent analysis', className: 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' };
+  }
+  if (role === 'synthesis') {
+    return { label: 'Synthesis', className: 'border-emerald-500/40 text-emerald-300 bg-emerald-500/10' };
+  }
+  if (role.startsWith('critic:')) {
+    const lens = role.slice('critic:'.length);
+    return { label: LENS_LABELS[lens] ?? lens, className: 'border-rose-500/40 text-rose-300 bg-rose-500/10' };
+  }
+  return { label: 'Critical review', className: 'border-amber-500/40 text-amber-300 bg-amber-500/10' };
+};
+
 const RoleBadge: React.FC<{ role: string }> = ({ role }) => {
-  const independent = role === 'independent_analyst';
+  const { label, className } = roleStyle(role);
   return (
-    <span
-      className={`text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full border ${
-        independent ? 'border-cyan-500/40 text-cyan-300 bg-cyan-500/10' : 'border-amber-500/40 text-amber-300 bg-amber-500/10'
-      }`}
-    >
-      {independent ? 'Independent analysis' : 'Critical review'}
+    <span className={`text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full border ${className}`}>
+      {label}
     </span>
   );
+};
+
+const roundCaption = (round: number, turns: Turn[]): string => {
+  if (turns.every((t) => t.role === 'synthesis')) return 'synthesis · agreements, open disagreements, next test';
+  if (round === 1) return 'each model answers alone';
+  if (turns.some((t) => t.role.startsWith('critic:'))) return 'specialised critics review earlier rounds';
+  return 'each model reviews earlier rounds';
 };
 
 const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange, now }) => {
@@ -171,11 +197,16 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
       {rounds.map(([round, turns]) => (
         <section key={round} className="space-y-3">
           <p className="text-[11px] uppercase tracking-[0.25em] text-slate-500 font-bold">
-            Round {round} · {round === 1 ? 'each model answers alone' : 'each model reviews earlier rounds'}
+            {turns.every((t) => t.role === 'synthesis') ? 'Final' : `Round ${round}`} · {roundCaption(round, turns)}
           </p>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${turns.length > 1 ? 'lg:grid-cols-2' : ''}`}>
             {turns.map((turn) => (
-              <div key={`${turn.round}-${turn.model}`} className="bg-slate-900 border border-slate-800 rounded-2xl p-4 min-w-0">
+              <div
+                key={`${turn.round}-${turn.model}`}
+                className={`bg-slate-900 border rounded-2xl p-4 min-w-0 ${
+                  turn.role === 'synthesis' ? 'border-emerald-500/30' : 'border-slate-800'
+                }`}
+              >
                 <div className="flex flex-wrap items-center gap-2 mb-3">
                   <span className="font-mono text-sm font-bold text-slate-100 break-all">{turn.model}</span>
                   <RoleBadge role={turn.role} />
@@ -227,6 +258,7 @@ const Vireax: React.FC = () => {
   const [cloudConsent, setCloudConsent] = useState(false);
   const [selected, setSelected] = useState<string[]>(() => readSelection()?.models ?? []);
   const [rounds, setRounds] = useState<number>(() => readSelection()?.rounds ?? 2);
+  const [panel, setPanel] = useState<boolean>(() => readSelection()?.panel ?? false);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -293,11 +325,11 @@ const Vireax: React.FC = () => {
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(SELECTION_KEY, JSON.stringify({ models: selected, rounds }));
+      window.localStorage.setItem(SELECTION_KEY, JSON.stringify({ models: selected, rounds, panel }));
     } catch {
       // Storage is a convenience only.
     }
-  }, [selected, rounds]);
+  }, [selected, rounds, panel]);
 
   useEffect(() => {
     if (!busy) return undefined;
@@ -335,7 +367,8 @@ const Vireax: React.FC = () => {
         body: JSON.stringify({
           task,
           models: selected,
-          max_rounds: rounds,
+          max_rounds: panel ? Math.max(rounds, 2) : rounds,
+          ...(panel ? { critic_lenses: ['math', 'logic', 'adversary'], synthesis: true } : {}),
           ...(cloudProviders.length ? { allow_cloud: cloudConsent } : {}),
         }),
       });
@@ -357,6 +390,8 @@ const Vireax: React.FC = () => {
   };
 
   const needsConsent = cloudProviders.length > 0 && !cloudConsent;
+  const effectiveRounds = panel ? Math.max(rounds, 2) : rounds;
+  const callCount = selected.length * effectiveRounds + (panel ? 1 : 0);
   const canSend =
     !busy && !needsConsent && selected.length >= 2 && draft.trim().length > 0 && draft.length <= MAX_TASK_CHARS;
   const sendHint =
@@ -454,20 +489,35 @@ const Vireax: React.FC = () => {
               <button
                 key={n}
                 type="button"
-                aria-pressed={rounds === n}
+                aria-pressed={effectiveRounds === n}
                 onClick={() => setRounds(n)}
-                disabled={busy}
+                disabled={busy || (panel && n === 1)}
+                title={panel && n === 1 ? 'The critic panel needs at least 2 rounds' : undefined}
                 className={`w-9 h-8 rounded-lg border text-xs font-bold disabled:opacity-40 ${
-                  rounds === n ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200' : 'border-slate-700 text-slate-400'
+                  effectiveRounds === n ? 'border-cyan-400 bg-cyan-500/15 text-cyan-200' : 'border-slate-700 text-slate-400'
                 }`}
               >
                 {n}
               </button>
             ))}
             <span className="text-xs text-slate-500 ml-1">
-              {selected.length} models × {rounds} rounds = {selected.length * rounds} calls
+              {selected.length} models × {effectiveRounds} rounds{panel ? ' + 1 synthesis' : ''} = {callCount} calls
             </span>
           </div>
+          <label className="flex items-start gap-3 cursor-pointer text-sm text-slate-300">
+            <input
+              type="checkbox"
+              checked={panel}
+              onChange={(event) => setPanel(event.target.checked)}
+              disabled={busy}
+              className="mt-0.5 h-4 w-4 accent-rose-400"
+            />
+            <span>
+              <span className="font-bold text-slate-200">Critic panel.</span> After round 1, models review as a maths critic,
+              a logic critic and a devil&apos;s advocate (rotating each round), then the first model writes a synthesis that
+              keeps open disagreements visible. Lenses are prompts on the same models, not extra reviewers.
+            </span>
+          </label>
           {sameBaseWarnings.map(([base, names]) => (
             <p
               key={base}
