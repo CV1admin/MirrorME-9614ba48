@@ -61,6 +61,7 @@ try:
         build_cloud_catalog,
         describe_cloud_catalog,
         list_ollama_models,
+        ollama_model_details,
         run_vireax_chat,
     )
 except ImportError:  # pragma: no cover - qviraex ships with the repository
@@ -423,11 +424,13 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
         except (urllib.error.URLError, OSError, ValueError) as exc:
             models = []
             ollama_error = str(getattr(exc, "reason", exc))
+        details = ollama_model_details(self.server.ollama_url, models) if models else {}  # type: ignore[attr-defined]
         self._send_json(
             200,
             {
                 "ok": True,
                 "models": models,
+                "model_details": details,
                 "ollama_error": ollama_error,
                 "cloud_models": describe_cloud_catalog(getattr(self.server, "vireax_cloud_catalog", {})),
                 "default_models": list(getattr(self.server, "vireax_models", [])),
@@ -548,7 +551,12 @@ def main() -> None:
         for entry in describe_cloud_catalog(cloud_catalog):
             state = "ready" if entry["available"] else f"needs {entry['key_env']}"
             print(f"Cloud model: {entry['id']} ({state})")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("MirrorME local bridge stopped.")
+    finally:
+        server.server_close()
 
 
 if __name__ == "__main__":

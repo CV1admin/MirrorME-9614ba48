@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { resolveBridgeEndpoint } from '../lib/localRuntimeBootstrap';
 
 const MODEL_CONFIG_KEY = 'mirrorme_model_config';
 const SELECTION_KEY = 'vireax_chat_selection';
-const LOOPBACK_DEFAULT = 'http://localhost:8765';
 const MAX_MODELS = 4;
 const MAX_TASK_CHARS = 20_000;
 
@@ -14,8 +14,16 @@ interface CloudModelInfo {
   key_env: string;
 }
 
+interface ModelDetails {
+  family: string;
+  parameter_size: string;
+  quantization: string;
+  parent_model: string;
+}
+
 interface ModelsResponse {
   models: string[];
+  model_details?: Record<string, ModelDetails>;
   ollama_error: string | null;
   cloud_models: CloudModelInfo[];
   default_models: string[];
@@ -37,6 +45,8 @@ interface ConverseResult {
   models: string[];
   max_rounds: number;
   sent_to_cloud?: string[];
+  system_prompt?: { version: string; sha256: string };
+  independence?: { same_base_groups: string[][]; notes: string[] };
   audit_head_hash: string;
   turns: Turn[];
 }
@@ -51,18 +61,17 @@ interface Exchange {
 }
 
 const readBridgeEndpoint = (): string => {
+  let stored: string | undefined;
   try {
     const raw = window.localStorage.getItem(MODEL_CONFIG_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as { ollamaEndpoint?: unknown };
-      if (typeof parsed.ollamaEndpoint === 'string' && parsed.ollamaEndpoint.trim()) {
-        return parsed.ollamaEndpoint.trim().replace(/\/$/, '');
-      }
+      if (typeof parsed.ollamaEndpoint === 'string') stored = parsed.ollamaEndpoint;
     }
   } catch {
-    // Fall back to the loopback default.
+    // Fall back to the default below.
   }
-  return LOOPBACK_DEFAULT;
+  return resolveBridgeEndpoint(stored, window.location);
 };
 
 const readSelection = (): { models: string[]; rounds: number } | null => {
@@ -83,10 +92,11 @@ const shortHash = (value: string): string => (value.length > 22 ? `${value.slice
 const isLocalOrigin = (origin: string): boolean => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 
 const bridgeCommand = (models: string[]): string => {
-  const picks = models.length >= 2 ? models.slice(0, 2) : ['mkultra:0.3', 'mkultra:0.4'];
-  const parts = ['python local_bridge/mirrorme_bridge.py', ...picks.map((m) => `--vireax-model ${m}`)];
-  const origin = window.location.origin;
-  if (!isLocalOrigin(origin)) parts.push(`--allowed-origin ${origin}`);
+  const { protocol, origin } = window.location;
+  const parts = ['python scripts/start_vireax.py'];
+  if (protocol === 'https:') parts.push('--no-ui');
+  else if (!isLocalOrigin(origin)) parts.push('--tailscale');
+  if (models.length >= 2) parts.push(...models.map((m) => `--vireax-model ${m}`));
   return parts.join(' ');
 };
 
@@ -188,6 +198,16 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
           {!!exchange.result.sent_to_cloud?.length && (
             <span className="text-violet-300/80">Sent to {exchange.result.sent_to_cloud.join(', ')}</span>
           )}
+          {exchange.result.system_prompt && (
+            <span className="font-mono" title={exchange.result.system_prompt.sha256}>
+              {exchange.result.system_prompt.version}
+            </span>
+          )}
+          {exchange.result.independence?.notes.map((note) => (
+            <span key={note} className="basis-full text-amber-200/80">
+              ⚠ {note}
+            </span>
+          ))}
           <span className="font-mono" title={exchange.result.audit_head_hash}>
             audit {shortHash(exchange.result.audit_head_hash)}
           </span>
@@ -201,6 +221,7 @@ const ExchangeView: React.FC<{ exchange: Exchange; now: number }> = ({ exchange,
 const Vireax: React.FC = () => {
   const [endpoint] = useState(readBridgeEndpoint);
   const [installed, setInstalled] = useState<string[]>([]);
+  const [modelDetails, setModelDetails] = useState<Record<string, ModelDetails>>({});
   const [cloudModels, setCloudModels] = useState<CloudModelInfo[]>([]);
   const [ollamaError, setOllamaError] = useState<string | null>(null);
   const [cloudConsent, setCloudConsent] = useState(false);
@@ -213,6 +234,21 @@ const Vireax: React.FC = () => {
   const [now, setNow] = useState(() => Date.now());
   const bottomRef = useRef<HTMLDivElement>(null);
   const busy = exchanges.some((e) => !e.result && !e.error);
+  const sameBaseWarnings = useMemo(() => {
+    const groups = new Map<string, string[]>();
+    for (const name of selected) {
+      const info = modelDetails[name];
+      if (!info) continue;
+      const key = info.parent_model
+        ? `parent:${info.parent_model}`
+        : info.family && info.parameter_size
+          ? `${info.family} ${info.parameter_size} ${info.quantization}`.trim()
+          : '';
+      if (key) groups.set(key, [...(groups.get(key) ?? []), name]);
+    }
+    return [...groups.entries()].filter(([, names]) => names.length > 1);
+  }, [modelDetails, selected]);
+
   const cloudProviders = useMemo(() => {
     const labels = cloudModels.filter((m) => selected.includes(m.id)).map((m) => m.provider_label);
     return [...new Set(labels)].sort();
@@ -235,6 +271,7 @@ const Vireax: React.FC = () => {
       setInstalled(data.models);
       setCloudModels(cloud);
       setOllamaError(data.ollama_error ?? null);
+      setModelDetails(data.model_details ?? {});
       setSelected((current) => {
         const kept = current.filter((m) => usable.includes(m));
         if (kept.length >= 2) return kept;
@@ -375,7 +412,7 @@ const Vireax: React.FC = () => {
         <div className="border border-amber-500/30 bg-amber-500/10 rounded-xl p-4 text-sm text-amber-200 space-y-2">
           <p>
             {bridgeError === 'bridge_unreachable'
-              ? `The local bridge isn't reachable at ${endpoint}. Start it on this computer, then press Reconnect:`
+              ? `The local bridge isn't reachable at ${endpoint}. Start it on the computer that runs your models, then press Reconnect:`
               : bridgeError}
           </p>
           <code className="block bg-slate-950/60 rounded-lg p-3 font-mono text-xs text-slate-200 break-all">
@@ -431,6 +468,16 @@ const Vireax: React.FC = () => {
               {selected.length} models × {rounds} rounds = {selected.length * rounds} calls
             </span>
           </div>
+          {sameBaseWarnings.map(([base, names]) => (
+            <p
+              key={base}
+              className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200"
+            >
+              {names.join(' and ')} look like the same base model ({base.replace(/^parent:/, '')}) with different
+              settings, so their agreement isn't independent. Pick a model from a different family or a cloud model for a
+              real second opinion.
+            </p>
+          ))}
           {cloudProviders.length > 0 && (
             <label className="flex items-start gap-3 rounded-xl border border-violet-500/30 bg-violet-500/10 p-3 text-sm text-violet-100 cursor-pointer">
               <input

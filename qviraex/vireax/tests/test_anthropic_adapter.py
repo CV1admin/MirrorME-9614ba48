@@ -115,6 +115,15 @@ class AnthropicAdapterTests(unittest.TestCase):
             self.make(endpoint="http://api.example/v1/messages")
         self.assertIsNotNone(self.make(endpoint="http://127.0.0.1:9/v1/messages"))
 
+    def test_custom_system_prompt_is_sent(self) -> None:
+        adapter = self.make(system_prompt="You are VIREAX.")
+        adapter._opener = FakeOpener(json.dumps({"content": [{"type": "text", "text": "ok"}]}).encode())
+        with mock.patch.dict(os.environ, {"TEST_ANTHROPIC_KEY": "sk-test"}):
+            adapter.respond(envelope())
+        self.assertEqual(json.loads(adapter._opener.request.data)["system"], "You are VIREAX.")
+        with self.assertRaisesRegex(ValueError, "system_prompt"):
+            self.make(system_prompt="  ")
+
     def test_output_token_cap_is_bounded(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_output_tokens"):
             self.make(max_output_tokens=0)
@@ -137,6 +146,16 @@ class OpenAICompatibleTokenCapTests(unittest.TestCase):
                     self.assertNotIn("max_completion_tokens", body)
                 else:
                     self.assertEqual(body[field], 256)
+
+    def test_custom_system_prompt_is_sent(self) -> None:
+        adapter = OpenAICompatibleAdapter(
+            AdapterSpec("m", "p", "r"), endpoint="https://models.example/v1/chat/completions",
+            api_model="m", system_prompt="You are VIREAX.",
+        )
+        adapter._opener = FakeOpener(json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode())
+        adapter.respond(AdapterEnvelope(target_model="m", role="r", prompt="x"))
+        messages = json.loads(adapter._opener.request.data)["messages"]
+        self.assertEqual(messages[0], {"role": "system", "content": "You are VIREAX."})
 
     def test_rejects_unknown_token_field(self) -> None:
         with self.assertRaisesRegex(ValueError, "max_tokens_field"):

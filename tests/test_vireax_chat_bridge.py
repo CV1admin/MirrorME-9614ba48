@@ -18,6 +18,13 @@ from local_bridge.vireax_chat import (
 
 INSTALLED = ["alpha:1", "beta:2", "gamma:3"]
 CLOUD_CALLS: list[dict] = []
+LOCAL_SYSTEM_PROMPTS: list[str] = []
+# alpha and beta mimic two Modelfiles built on one base model; gamma differs.
+SHOW_DETAILS = {
+    "alpha:1": {"family": "qwen3", "parameter_size": "8.2B", "quantization_level": "Q4_K_M"},
+    "beta:2": {"family": "qwen3", "parameter_size": "8.2B", "quantization_level": "Q4_K_M"},
+    "gamma:3": {"family": "llama", "parameter_size": "8.0B", "quantization_level": "Q4_K_M"},
+}
 
 
 class FakeOllamaHandler(BaseHTTPRequestHandler):
@@ -32,6 +39,12 @@ class FakeOllamaHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         model = body["model"]
+        if self.path == "/api/show":
+            if model in SHOW_DETAILS:
+                self._json(200, {"details": SHOW_DETAILS[model]})
+            else:
+                self._json(404, {"error": "not found"})
+            return
         if self.path == "/v1/messages":  # fake Anthropic
             CLOUD_CALLS.append({"path": self.path, "key": self.headers.get("x-api-key"), "body": body})
             peers = "Prior contributions" in body["messages"][0]["content"]
@@ -44,6 +57,7 @@ class FakeOllamaHandler(BaseHTTPRequestHandler):
         if self.path != "/v1/chat/completions" or model not in INSTALLED:
             self._json(404, {"error": "model not found"})
             return
+        LOCAL_SYSTEM_PROMPTS.append(body["messages"][0]["content"])
         prompt = body["messages"][-1]["content"]
         seen_peers = "Prior contributions" in prompt
         self._json(200, {
@@ -224,6 +238,44 @@ class VireaxChatBridgeTest(unittest.TestCase):
         self.assertEqual(openai_calls[0]["body"]["max_completion_tokens"], 2048)
         self.assertNotIn("sk-ant", json.dumps(data))
 
+    def test_models_listing_includes_base_model_details(self) -> None:
+        status, _, data = self.request("GET", "/api/vireax/models")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["model_details"]["alpha:1"]["family"], "qwen3")
+        self.assertEqual(data["model_details"]["gamma:3"]["family"], "llama")
+
+    def test_same_base_local_models_are_disclosed(self) -> None:
+        status, _, data = self.request(
+            "POST", "/api/vireax/converse", {"task": "x", "models": ["alpha:1", "beta:2"], "max_rounds": 1},
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["independence"]["same_base_groups"], [["alpha:1", "beta:2"]])
+        self.assertIn("same base model", data["independence"]["notes"][0])
+
+    def test_distinct_local_models_still_note_single_provider(self) -> None:
+        status, _, data = self.request(
+            "POST", "/api/vireax/converse", {"task": "x", "models": ["alpha:1", "gamma:3"], "max_rounds": 1},
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["independence"]["same_base_groups"], [])
+        self.assertEqual(len(data["independence"]["notes"]), 1)
+        self.assertIn("one provider", data["independence"]["notes"][0])
+
+    def test_vireax_system_prompt_reaches_every_model_and_is_reported(self) -> None:
+        CLOUD_CALLS.clear()
+        LOCAL_SYSTEM_PROMPTS.clear()
+        with mock.patch.dict(os.environ, {"TEST_ANTHROPIC_KEY": "sk-ant"}):
+            status, _, data = self.request(
+                "POST", "/api/vireax/converse",
+                {"task": "x", "models": ["alpha:1", "anthropic/claude-test"], "max_rounds": 1, "allow_cloud": True},
+            )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["system_prompt"]["version"], "vireax-mirror-agent/1.0")
+        self.assertTrue(data["system_prompt"]["sha256"].startswith("sha256:"))
+        self.assertTrue(LOCAL_SYSTEM_PROMPTS[-1].startswith("You are VIREÁX"))
+        self.assertTrue(CLOUD_CALLS[-1]["body"]["system"].startswith("You are VIREÁX"))
+        self.assertNotIn("You are VIREÁX", json.dumps(data))
+
     def test_disallowed_origin_is_blocked(self) -> None:
         status, _, _ = self.request(
             "POST", "/api/vireax/converse", {"task": "x"}, headers={"Origin": "https://evil.example"},
@@ -238,6 +290,18 @@ class VireaxChatBridgeTest(unittest.TestCase):
         self.assertEqual(status, 204)
         self.assertEqual(headers.get("Access-Control-Allow-Private-Network"), "true")
         self.assertEqual(headers.get("Access-Control-Allow-Origin"), "https://cv1admin.github.io")
+
+
+class SystemPromptTests(unittest.TestCase):
+    def test_prompt_is_the_spec_text_without_provenance_header(self) -> None:
+        from qviraex.vireax.system_prompt import load_vireax_system_prompt
+
+        prompt = load_vireax_system_prompt()
+        self.assertEqual(prompt.version, "vireax-mirror-agent/1.0")
+        self.assertTrue(prompt.text.startswith("You are VIREÁX, a personal reflective AI agent."))
+        self.assertNotIn("Source: Civilisation-one/DOCUMENTS", prompt.text)
+        for required in ("Mirror:", "Critic:", "Never claim that a test passed", "NOT_TESTED", "no persistent memory"):
+            self.assertIn(required, prompt.text)
 
 
 class CloudCatalogTests(unittest.TestCase):
