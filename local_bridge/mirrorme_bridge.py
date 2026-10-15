@@ -22,7 +22,7 @@ VIREAX multi-model chat:
     GET  /api/vireax/models
     POST /api/vireax/converse
     Body: { task, models?: [name, ...], max_rounds?: 1-3, allow_cloud?: true }
-    Cloud models (Anthropic, OpenAI, Gemini) come only from --cloud-model and keys
+    Cloud models (OpenAI, Anthropic, Gemini, xAI, DeepSeek) come only from keys and --cloud-model
     in this process's environment; cloud calls require allow_cloud: true.
 
 The handshake is local session confirmation. It is not cryptographic proof of legal
@@ -520,8 +520,10 @@ def main() -> None:
         dest="cloud_models",
         help=(
             "Offer a cloud model in VIREAX chat as provider/model, provider one of "
-            "anthropic, openai, gemini. Keys come from ANTHROPIC_API_KEY, OPENAI_API_KEY, "
-            "GEMINI_API_KEY. Repeatable."
+            "openai, anthropic, gemini, xai, deepseek. Each provider with its key set "
+            "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, XAI_API_KEY, DEEPSEEK_API_KEY) "
+            "is offered automatically with its default or <PROVIDER>_MODEL; listing a "
+            "provider here replaces that. Repeatable."
         ),
     )
     args = parser.parse_args()

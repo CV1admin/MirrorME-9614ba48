@@ -86,7 +86,7 @@ Llama    -> local_fallback
 
 ## VIREÁX chat
 
-Ask one question; two to four models each answer alone, then review each other's answers. Open `/#/vireax` in the app.
+Ask one question; two to six models each answer alone, then review each other's answers. Open `/#/vireax` in the app.
 
 ```bash
 python scripts/start_vireax.py                 # this computer: http://127.0.0.1:3000/#/vireax
@@ -94,7 +94,7 @@ python scripts/start_vireax.py --tailscale     # also from your phone over Tails
 python scripts/start_vireax.py --no-ui         # only the bridge, for the hosted site
 ```
 
-Add `--vireax-model NAME` (repeatable) for default models and `--cloud-model provider/model` for cloud models; set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` in the same terminal first. Every model receives the versioned VIREÁX Mirror Agent system prompt (`qviraex/vireax/prompts/`).
+Add `--vireax-model NAME` (repeatable) for default models. For cloud models, set any of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `DEEPSEEK_API_KEY` in the same terminal first; each provider then appears with the Civilisation.One default model, or `<PROVIDER>_MODEL`, or `--cloud-model provider/model`. Every model receives the versioned VIREÁX Mirror Agent system prompt (`qviraex/vireax/prompts/`).
 
 For a real second opinion, pick models from different families. `mkultra:0.3`, `mkultra:0.4` and `mirrorme` are all built on `qwen3:8b`; the page warns when selected models look like the same base model. Details: [docs/MULTI_MODEL_COMMUNICATION.md](docs/MULTI_MODEL_COMMUNICATION.md#chat-window).
 

@@ -307,6 +307,12 @@ class VireaxChatBridgeTest(unittest.TestCase):
                 status, _, data = self.request("POST", "/api/vireax/converse", {**base, **extra})
                 self.assertEqual(status, 400, data)
 
+    def test_up_to_six_models_per_question(self) -> None:
+        payload = {"task": "x", "models": [f"m{i}:1" for i in range(7)], "max_rounds": 1}
+        status, _, data = self.request("POST", "/api/vireax/converse", payload)
+        self.assertEqual(status, 400)
+        self.assertIn("at most 6", data["detail"])
+
     def test_disallowed_origin_is_blocked(self) -> None:
         status, _, _ = self.request(
             "POST", "/api/vireax/converse", {"task": "x"}, headers={"Origin": "https://evil.example"},
@@ -350,8 +356,45 @@ class CloudCatalogTests(unittest.TestCase):
         self.assertEqual(sorted(catalog), ["anthropic/claude-opus-5-5", "gemini/gemini-x", "openai/gpt-x"])
         self.assertEqual(catalog["openai/gpt-x"].api_model, "gpt-x")
 
+    def test_every_platform_provider_is_offered_once_its_key_is_set(self) -> None:
+        env = {
+            "OPENAI_API_KEY": "k", "ANTHROPIC_API_KEY": "k", "GEMINI_API_KEY": "k",
+            "XAI_API_KEY": "k", "DEEPSEEK_API_KEY": "k",
+        }
+        catalog = build_cloud_catalog([], environ=env)
+        self.assertEqual(sorted(catalog), [
+            "anthropic/claude-haiku-5-5", "anthropic/claude-sonnet-5-5", "deepseek/deepseek-chat",
+            "gemini/gemini-2.5-flash", "openai/gpt-5-mini", "xai/grok-4.3",
+        ])
+        self.assertEqual(sorted(CLOUD_PROVIDERS), ["anthropic", "deepseek", "gemini", "openai", "xai"])
+
+    def test_platform_endpoints_and_key_variables(self) -> None:
+        expected = {
+            "openai": ("https://api.openai.com/v1/chat/completions", "OPENAI_API_KEY", "max_completion_tokens"),
+            "anthropic": ("https://api.anthropic.com/v1/messages", "ANTHROPIC_API_KEY", "max_tokens"),
+            "xai": ("https://api.x.ai/v1/chat/completions", "XAI_API_KEY", "max_tokens"),
+            "deepseek": ("https://api.deepseek.com/chat/completions", "DEEPSEEK_API_KEY", "max_tokens"),
+        }
+        for key, (endpoint, key_env, field) in expected.items():
+            with self.subTest(provider=key):
+                provider = CLOUD_PROVIDERS[key]
+                self.assertEqual((provider.endpoint, provider.key_env, provider.max_tokens_field), (endpoint, key_env, field))
+                self.assertTrue(provider.endpoint.startswith("https://"))
+
+    def test_provider_model_variable_replaces_default(self) -> None:
+        catalog = build_cloud_catalog([], environ={"XAI_API_KEY": "k", "XAI_MODEL": "grok-custom"})
+        self.assertEqual(sorted(catalog), ["xai/grok-custom"])
+        with self.assertRaisesRegex(ValueError, "XAI_MODEL"):
+            build_cloud_catalog([], environ={"XAI_API_KEY": "k", "XAI_MODEL": "bad name!"})
+
+    def test_listed_models_still_win_over_model_variable(self) -> None:
+        catalog = build_cloud_catalog(
+            ["deepseek/deepseek-reasoner"], environ={"DEEPSEEK_API_KEY": "k", "DEEPSEEK_MODEL": "deepseek-chat"},
+        )
+        self.assertEqual(sorted(catalog), ["deepseek/deepseek-reasoner"])
+
     def test_invalid_entries_rejected(self) -> None:
-        for entry in ("gpt-x", "azure/gpt-x", "openai/", "openai/bad name"):
+        for entry in ("gpt-x", "azure/gpt-x", "openai/", "openai/bad name", "mistral/large"):
             with self.subTest(entry=entry):
                 with self.assertRaises(ValueError):
                     build_cloud_catalog([entry], environ={})

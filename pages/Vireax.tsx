@@ -3,7 +3,7 @@ import { resolveBridgeEndpoint } from '../lib/localRuntimeBootstrap';
 
 const MODEL_CONFIG_KEY = 'mirrorme_model_config';
 const SELECTION_KEY = 'vireax_chat_selection';
-const MAX_MODELS = 4;
+const MAX_MODELS = 6;
 const MAX_TASK_CHARS = 20_000;
 
 interface CloudModelInfo {
@@ -112,7 +112,13 @@ const describeError = async (response: Response): Promise<string> => {
   }
 };
 
-const PROVIDER_LABELS: Record<string, string> = { anthropic: 'Anthropic', openai: 'OpenAI', gemini: 'Gemini' };
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  gemini: 'Gemini',
+  xai: 'xAI',
+  deepseek: 'DeepSeek',
+};
 
 const SourceBadge: React.FC<{ provider?: string }> = ({ provider }) =>
   provider && provider !== 'ollama' ? (
@@ -474,9 +480,8 @@ const Vireax: React.FC = () => {
             <span className="text-xs uppercase tracking-widest text-violet-400/80 font-bold mr-1 w-14">Cloud</span>
             {cloudModels.length === 0 && (
               <span className="text-xs text-slate-500">
-                None configured. Set ANTHROPIC_API_KEY before starting the bridge, or add{' '}
-                <code className="font-mono">--cloud-model openai/MODEL</code> /{' '}
-                <code className="font-mono">gemini/MODEL</code>.
+                None configured. Before starting VIREAX, set any of OPENAI_API_KEY, ANTHROPIC_API_KEY,
+                GEMINI_API_KEY, XAI_API_KEY or DEEPSEEK_API_KEY; each provider then appears here.
               </span>
             )}
             {cloudModels.map((m) =>

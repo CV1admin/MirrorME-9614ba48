@@ -37,7 +37,7 @@ from qviraex.vireax.system_prompt import load_vireax_system_prompt  # noqa: E402
 
 MAX_TASK_CHARS = 20_000
 MAX_OUTPUT_CHARS = 8_000
-MAX_CHAT_MODELS = 4
+MAX_CHAT_MODELS = 6
 DEFAULT_ROUNDS = 2
 MODEL_CALL_TIMEOUT_SECONDS = 120.0
 CLOUD_MAX_OUTPUT_TOKENS = 2_048
@@ -52,25 +52,44 @@ class CloudProvider:
     endpoint: str
     key_env: str
     max_tokens_field: str = "max_tokens"
+    model_env: str = ""  # optional override of the default model, as in the Civilisation.One API
 
 
+# Mirrors the provider registry of the Civilisation.One API (Civilisation-one/WEBSITE,
+# lib/mirrorme-provider-adapters.ts and lib/mirrorme-server-orchestration.ts): same
+# providers, key variables, model variables and default models.
 CLOUD_PROVIDERS: dict[str, CloudProvider] = {
-    "anthropic": CloudProvider(
-        "anthropic", "Anthropic", "anthropic", ANTHROPIC_MESSAGES_ENDPOINT, "ANTHROPIC_API_KEY",
-    ),
     "openai": CloudProvider(
         "openai", "OpenAI", "openai", "https://api.openai.com/v1/chat/completions",
-        "OPENAI_API_KEY", max_tokens_field="max_completion_tokens",
+        "OPENAI_API_KEY", max_tokens_field="max_completion_tokens", model_env="OPENAI_MODEL",
+    ),
+    "anthropic": CloudProvider(
+        "anthropic", "Anthropic", "anthropic", ANTHROPIC_MESSAGES_ENDPOINT, "ANTHROPIC_API_KEY",
+        model_env="ANTHROPIC_MODEL",
     ),
     "gemini": CloudProvider(
         "gemini", "Google Gemini", "openai",
         "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "GEMINI_API_KEY",
+        model_env="GEMINI_MODEL",
+    ),
+    "xai": CloudProvider(
+        "xai", "xAI", "openai", "https://api.x.ai/v1/chat/completions", "XAI_API_KEY",
+        model_env="XAI_MODEL",
+    ),
+    "deepseek": CloudProvider(
+        "deepseek", "DeepSeek", "openai", "https://api.deepseek.com/chat/completions", "DEEPSEEK_API_KEY",
+        model_env="DEEPSEEK_MODEL",
     ),
 }
-# Offered automatically when the provider's key is set and the operator lists no
-# models for it. Other providers' model IDs change often, so they are opt-in.
+# Offered automatically once a provider's key is set, unless the operator lists that
+# provider's models with --cloud-model. <PROVIDER>_MODEL, if set, replaces the default.
+# Defaults follow the Civilisation.One API; Anthropic uses its current models.
 DEFAULT_CLOUD_MODELS: dict[str, tuple[str, ...]] = {
+    "openai": ("gpt-5-mini",),
     "anthropic": ("claude-sonnet-5-5", "claude-haiku-5-5"),
+    "gemini": ("gemini-2.5-flash",),
+    "xai": ("grok-4.3",),
+    "deepseek": ("deepseek-chat",),
 }
 
 
@@ -120,6 +139,11 @@ def build_cloud_catalog(
         provider = CLOUD_PROVIDERS[provider_key]
         if provider_key in listed or not env.get(provider.key_env):
             continue
+        override = env.get(provider.model_env, "").strip() if provider.model_env else ""
+        if override:
+            if not _MODEL_NAME.match(override):
+                raise ValueError(f"invalid model name in {provider.model_env}: {override!r}")
+            models = (override,)
         for api_model in models:
             model_id = f"{provider_key}/{api_model}"
             catalog[model_id] = CloudModel(model_id, provider, api_model)
