@@ -1,16 +1,17 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { lazy, Suspense, useState, useEffect, useCallback } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
-import MirrorMe from './pages/MirrorMe';
-import ThinLineTheory from './pages/ThinLineTheory';
-import CivilisationDashboard from './pages/CivilisationDashboard';
-import OiiidsOperationsDashboard from './pages/OiiidsOperationsDashboard';
-import SystemMap from './pages/SystemMap';
-import MKultraV04 from './pages/MKultraV04';
-import Settings from './pages/Settings';
-import Vireax from './pages/Vireax';
 import { SimulationState, GateStatus, ContradictionEvent } from './types';
 import { createBrainNodes, createMetricFrame, isHealthyFrame } from './simulation/SimulationEngine';
+
+const MirrorMe = lazy(() => import('./pages/MirrorMe'));
+const ThinLineTheory = lazy(() => import('./pages/ThinLineTheory'));
+const CivilisationDashboard = lazy(() => import('./pages/CivilisationDashboard'));
+const OiiidsOperationsDashboard = lazy(() => import('./pages/OiiidsOperationsDashboard'));
+const SystemMap = lazy(() => import('./pages/SystemMap'));
+const MKultraV04 = lazy(() => import('./pages/MKultraV04'));
+const Settings = lazy(() => import('./pages/Settings'));
+const Vireax = lazy(() => import('./pages/Vireax'));
 
 const INITIAL_NODES = createBrainNodes();
 
@@ -115,18 +116,20 @@ const App: React.FC = () => {
   return (
     <HashRouter>
       <Layout simState={simState} toggleSimulation={toggleSimulation}>
-        <Routes>
-          <Route path="/" element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard" element={<CivilisationDashboard />} />
-          <Route path="/civilisation-dashboard" element={<CivilisationDashboard />} />
-          <Route path="/system-map" element={<SystemMap />} />
-          <Route path="/oiiids-operations" element={<OiiidsOperationsDashboard />} />
-          <Route path="/mirrorme" element={<MirrorMe simState={simState} />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/mkultra-v04" element={<MKultraV04 />} />
-          <Route path="/vireax" element={<Vireax />} />
-          <Route path="/thin-line-theory" element={<ThinLineTheory />} />
-        </Routes>
+        <Suspense fallback={<div className="p-6 text-sm text-slate-400" role="status">Loading page...</div>}>
+          <Routes>
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/dashboard" element={<CivilisationDashboard />} />
+            <Route path="/civilisation-dashboard" element={<CivilisationDashboard />} />
+            <Route path="/system-map" element={<SystemMap />} />
+            <Route path="/oiiids-operations" element={<OiiidsOperationsDashboard />} />
+            <Route path="/mirrorme" element={<MirrorMe simState={simState} />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/mkultra-v04" element={<MKultraV04 />} />
+            <Route path="/vireax" element={<Vireax />} />
+            <Route path="/thin-line-theory" element={<ThinLineTheory />} />
+          </Routes>
+        </Suspense>
       </Layout>
     </HashRouter>
   );
