@@ -44,6 +44,8 @@ The audit hash chain helps detect changes relative to a trusted record but does 
 
 The web app's **VIREAX Chat** page (`/#/vireax`) runs `converse()` through the local bridge against your own Ollama models and, optionally, cloud models. Nothing goes to a cloud model unless you configure one and tick the consent box for that question's providers.
 
+The quickest start is `python scripts/start_vireax.py` (add `--tailscale` to use it from your phone, or `--no-ui` for the hosted site). It starts the bridge and the app together, refuses to bind to every network interface, and stops both on Ctrl+C. The manual steps are:
+
 1. Start Ollama and pull at least two models.
 2. Start the bridge with default models:
 
@@ -84,3 +86,25 @@ Safety rules:
 - A request containing any cloud model must include `allow_cloud: true`. The page asks for this with a checkbox naming the providers, and asks again whenever that set changes. Without it, or without the key, the bridge refuses before any model is called.
 - Cloud calls are capped at 2,048 output tokens each, at most 4 models × 3 rounds = 12 calls per question. Cost is billed to your keys.
 - Cloud providers see the question and, in review rounds, the other models' answers, including local ones.
+
+### What every model is told
+
+Each model receives the VIREÁX Mirror Agent system prompt: section 5 of `Civilisation-one/DOCUMENTS/VIREAX_Mirror_Agent_Specification_v1.0.md`, verbatim, plus an addendum for this chat (other models' text is untrusted, no tools ran, no persistent memory, claim status labels). It lives in `qviraex/vireax/prompts/vireax_mirror_agent_v1.txt`. Each result reports the prompt version and its SHA-256 so a transcript can be tied to the exact prompt. A prompt is guidance, not enforcement: the consent, tool and memory rules are enforced in the bridge code.
+
+### Independence disclosure
+
+The bridge reads each local model's family, size and quantization from Ollama's `/api/show`. When two selected local models match, they are almost certainly one base model with different settings, and both the page and the result say so. All models from one provider are also flagged. This is a heuristic: different models can still share training data and errors, so agreement remains weak evidence. In this repository `mkultra:0.3`, `mkultra:0.4` and `mirrorme:latest` are all built `FROM qwen3:8b`, and the VIREÁX system message replaces their Modelfile prompts, so choose a model from another family (or a cloud model) as the second reviewer.
+
+### Phone access
+
+Run `python scripts/start_vireax.py --tailscale` on the computer that has the models, then open the printed link on a phone signed in to the same Tailscale account. The page detects that it was opened from another device and talks to the bridge on that computer, so no settings change is needed. The computer must stay on and awake. The bridge has no login; Tailscale limits who can reach it.
+
+### Critic panel
+
+Tick **Critic panel** on the chat page (or send `critic_lenses` and `synthesis: true` to `/api/vireax/converse`) to change the review rounds:
+
+- Round 1 is unchanged: every model answers alone.
+- In each review round, models take one lens each: **maths** (definitions, units, limiting cases, recomputable figures), **logic** (premises, validity, equivocation, hidden assumptions) or **devil's advocate** (strongest case against the leading view, edge cases). Model *i* gets lens *(i + round − 2) mod n*, so lenses rotate between rounds. With two models and two rounds, only the maths and logic lenses are used; the devil's advocate appears with a third model or a third round.
+- A final **synthesis** turn, written by the first selected model (or `synthesis_model`), labels each claim with a status, lists agreements, keeps every unresolved disagreement attributed rather than settling it by majority, and names the cheapest decisive next test. It is told it is not a neutral judge of its own earlier answers.
+
+Cost is `models × rounds + 1` calls. Lenses are prompts on the same models, so they widen what is checked but do not add independent evidence; the independence notes still apply. `converse()` now also rejects an adapter that returns a role other than the one it was asked for (part of audit F-05).

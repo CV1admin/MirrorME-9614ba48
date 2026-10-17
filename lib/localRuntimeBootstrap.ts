@@ -55,3 +55,30 @@ export function bootstrapLocalRuntimeConfig(): void {
     window.localStorage.setItem(LOCAL_RUNTIME_CONFIG_KEY, JSON.stringify(MKULTRA_LOCAL_CONFIG));
   }
 }
+
+const LOOPBACK_HOST = /^(localhost|127\.0\.0\.1|\[::1\])$/;
+
+/**
+ * Resolve the bridge URL for this page.
+ *
+ * The stored default points at localhost, which is only right on the computer that
+ * runs the bridge. When the page itself was served over plain HTTP from another
+ * address (for example a phone opening http://100.x.y.z:3000 over Tailscale), the
+ * bridge is on that same machine, so a loopback setting is replaced with the page's
+ * host. An explicitly configured non-loopback endpoint is always kept.
+ */
+export function resolveBridgeEndpoint(stored: string | undefined, location: Pick<Location, 'protocol' | 'hostname'>): string {
+  const endpoint = (stored ?? '').trim().replace(/\/$/, '') || MKULTRA_LOCAL_CONFIG.ollamaEndpoint;
+  let storedHost = '';
+  try {
+    storedHost = new URL(endpoint).hostname;
+  } catch {
+    return endpoint;
+  }
+  const pageIsRemoteHttp = location.protocol === 'http:' && !LOOPBACK_HOST.test(location.hostname);
+  if (pageIsRemoteHttp && LOOPBACK_HOST.test(storedHost)) {
+    const port = new URL(endpoint).port || '8765';
+    return `http://${location.hostname}:${port}`;
+  }
+  return endpoint;
+}

@@ -4,7 +4,7 @@ import unittest
 from dataclasses import replace
 
 from qviraex.vireax.adapters import AdapterEnvelope, AdapterResult, AdapterSpec, StaticAdapter
-from qviraex.vireax.multi_model import converse, verify_conversation_result
+from qviraex.vireax.multi_model import CRITIC_LENSES, converse, verify_conversation_result
 from qviraex.vireax.router import ModelRouter
 
 
@@ -92,6 +92,119 @@ class FirstRoundIndependenceTests(unittest.TestCase):
             ["independent_analyst"] * len(self.adapters),
         )
         self.assertTrue(verify_conversation_result(result))
+
+
+class CriticPanelTests(unittest.TestCase):
+    """Specialised critic lenses in review rounds, plus an optional synthesis turn."""
+
+    def setUp(self) -> None:
+        self.router = ModelRouter()
+        self.adapters = [RoundTaggedAdapter(AdapterSpec(name, "test", "analyst")) for name in ("alpha", "beta", "gamma")]
+        for adapter in self.adapters:
+            self.router.register(adapter)
+        self.names = [adapter.spec.model for adapter in self.adapters]
+
+    def run_panel(self, **kwargs):
+        options = {"max_rounds": 2, "critic_lenses": ["math", "logic", "adversary"]}
+        options.update(kwargs)
+        return converse(self.router, task="Evaluate a sample claim.", model_names=self.names, **options)
+
+    def test_review_round_gives_each_model_a_different_lens(self) -> None:
+        result = self.run_panel()
+        round_two = [turn.role for turn in result.turns if turn.round_number == 2]
+        self.assertEqual(round_two, ["critic:math", "critic:logic", "critic:adversary"])
+        for adapter, lens in zip(self.adapters, ["math", "logic", "adversary"]):
+            self.assertIn(CRITIC_LENSES[lens], adapter.prompts[1])
+            for other in set(CRITIC_LENSES) - {lens}:
+                self.assertNotIn(CRITIC_LENSES[other], adapter.prompts[1])
+        self.assertTrue(verify_conversation_result(result))
+
+    def test_lenses_rotate_between_review_rounds(self) -> None:
+        result = self.run_panel(max_rounds=3)
+        by_round = {
+            r: [turn.role for turn in result.turns if turn.round_number == r] for r in (2, 3)
+        }
+        self.assertEqual(by_round[2], ["critic:math", "critic:logic", "critic:adversary"])
+        self.assertEqual(by_round[3], ["critic:logic", "critic:adversary", "critic:math"])
+
+    def test_first_round_stays_independent_and_lens_free(self) -> None:
+        self.run_panel()
+        for adapter in self.adapters:
+            self.assertEqual(adapter.roles[0], "independent_analyst")
+            for text in CRITIC_LENSES.values():
+                self.assertNotIn(text, adapter.prompts[0])
+            self.assertNotIn("Prior contributions", adapter.prompts[0])
+
+    def test_fewer_lenses_than_models_cycle(self) -> None:
+        result = self.run_panel(critic_lenses=["adversary"])
+        self.assertEqual(
+            [turn.role for turn in result.turns if turn.round_number == 2],
+            ["critic:adversary"] * 3,
+        )
+
+    def test_synthesis_runs_once_after_all_rounds_and_sees_everything(self) -> None:
+        result = self.run_panel(synthesis_model="beta")
+        self.assertEqual(len(result.turns), 7)
+        final = result.turns[-1]
+        self.assertEqual((final.model, final.role, final.round_number), ("beta", "synthesis", 3))
+        synthesis_prompt = self.adapters[1].prompts[-1]
+        self.assertIn("SYNTHESIS step", synthesis_prompt)
+        self.assertIn("without settling it by majority vote", synthesis_prompt)
+        for turn in result.turns[:-1]:
+            self.assertIn(turn.output, synthesis_prompt)
+        self.assertEqual(len(self.adapters[0].prompts), 2)
+        self.assertEqual(len(self.adapters[2].prompts), 2)
+        self.assertTrue(verify_conversation_result(result, expected_head_hash=result.audit.head_hash))
+
+    def test_synthesis_without_lenses_keeps_plain_reviewers(self) -> None:
+        result = converse(
+            self.router, task="x", model_names=self.names, max_rounds=2, synthesis_model="alpha",
+        )
+        self.assertEqual(
+            [turn.role for turn in result.turns],
+            ["independent_analyst"] * 3 + ["critical_reviewer"] * 3 + ["synthesis"],
+        )
+
+    def test_default_behaviour_is_unchanged(self) -> None:
+        result = converse(self.router, task="x", model_names=self.names, max_rounds=2)
+        self.assertEqual(
+            [turn.role for turn in result.turns],
+            ["independent_analyst"] * 3 + ["critical_reviewer"] * 3,
+        )
+
+    def test_invalid_panel_options_fail_before_any_call(self) -> None:
+        cases = [
+            ({"critic_lenses": ["physics"]}, "subset of"),
+            ({"critic_lenses": []}, "subset of"),
+            ({"critic_lenses": ["math", "math"]}, "unique"),
+            ({"critic_lenses": "math"}, "sequence of lens names"),
+            ({"critic_lenses": ["math"], "max_rounds": 1}, "at least 2"),
+            ({"synthesis_model": "delta"}, "one of model_names"),
+        ]
+        for kwargs, message in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, message):
+                    self.run_panel(**kwargs)
+        for adapter in self.adapters:
+            self.assertEqual(adapter.prompts, [])
+
+    def test_adapter_returning_a_different_role_is_rejected(self) -> None:
+        class RoleSwapper(RecordingAdapter):
+            def respond(self, envelope):
+                result = super().respond(envelope)
+                return replace(result, role="synthesis")
+
+        router = ModelRouter()
+        router.register(RoleSwapper(AdapterSpec("alpha", "test", "analyst"), "a"))
+        router.register(RecordingAdapter(AdapterSpec("beta", "test", "analyst"), "b"))
+        with self.assertRaisesRegex(ValueError, "returned role"):
+            converse(router, task="x", model_names=["alpha", "beta"], max_rounds=1)
+
+    def test_audit_records_panel_configuration(self) -> None:
+        result = self.run_panel(synthesis_model="gamma")
+        started = result.audit.records[0].payload
+        self.assertEqual(started["critic_lenses"], ["math", "logic", "adversary"])
+        self.assertEqual(started["synthesis_model"], "gamma")
 
 
 class MultiModelTests(unittest.TestCase):

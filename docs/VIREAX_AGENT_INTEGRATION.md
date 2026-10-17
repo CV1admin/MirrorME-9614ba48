@@ -12,6 +12,16 @@ MirrorME / Vite UI
   -> schema validation + audit metadata
   -> response marked advisory-only and V0 when evidence was not independently checked
 
+Local path (implemented in this repository)
+
+MirrorME `/#/vireax` page
+  -> local bridge on the operator's machine (loopback or Tailscale; origin allow-list)
+  -> VIREÁX system prompt + bounded multi-model review (qviraex/vireax/multi_model.py)
+  -> Ollama models and, with per-question consent, Anthropic / OpenAI / Gemini
+  -> hash-audited transcript, status completed_unverified, independence notes
+
+The local path has no user accounts, rate limiter or persistent memory. It is for the operator's own use, not a production deployment.
+
 Approved memory (separate transaction)
   -> propose -> preview exact diff -> user approval -> commit -> audit receipt
 
