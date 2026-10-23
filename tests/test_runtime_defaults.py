@@ -13,4 +13,5 @@ def test_runtime_defaults_unify_on_mirrorme_latest() -> None:
     assert 'DEFAULT_MODEL = "mirrorme:latest"' in bridge_text
     assert '"mirrorme:latest"' in start_script_text
     assert '"mirrorme:latest"' in run_script_text
-    assert "ollamaModel: 'mirrorme:latest'" in settings_text
+    assert "const DEFAULT_OLLAMA_MODEL = 'mirrorme:latest';" in settings_text
+    assert "ollamaModel: DEFAULT_OLLAMA_MODEL" in settings_text
