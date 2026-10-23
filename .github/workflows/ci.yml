@@ -112,6 +112,7 @@ jobs:
           python -m unittest qviraex.vireax.tests.test_multi_model -v
           python -m unittest qviraex.vireax.tests.test_openai_compatible_adapter -v
           python -m unittest qviraex.vireax.tests.test_ara_adapter -v
+          python -m unittest qviraex.vireax.tests.test_ara_chat -v
 
       - name: Upload Python test report
         if: always()
