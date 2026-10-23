@@ -28,16 +28,15 @@ class HMACSigner:
         self._secret = secret
 
     def sign(self, envelope: ResourceEnvelope) -> ResourceEnvelope:
+        # Sign the envelope exactly as supplied. Callers must finalize all
+        # manifest fields before signing; mutating a signed manifest invalidates
+        # the signature.
         signature = hmac.new(
             self._secret,
             envelope.canonical_manifest_bytes(),
             sha256,
         ).hexdigest()
-        return replace(
-            envelope,
-            signature=f"hmac-sha256:{signature}",
-            manifest=replace(envelope.manifest, status=ResourceStatus.SIGNED),
-        )
+        return replace(envelope, signature=f"hmac-sha256:{signature}")
 
     def verify(self, envelope: ResourceEnvelope) -> bool:
         if not envelope.signature or not envelope.signature.startswith("hmac-sha256:"):

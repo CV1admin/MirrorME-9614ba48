@@ -22,6 +22,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      - name: Initialize Python test report
+        shell: bash
+        run: |
+          printf '%s\n' \
+            'Python test suites have not run yet.' \
+            > python-test-output.txt
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -38,13 +45,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Initialize Python test report
-        shell: bash
-        run: |
-          printf '%s\n' \
-            'Python unit tests did not run because an earlier validation step failed.' \
-            > python-test-output.txt
 
       - name: Type-check and build
         run: npm run check
@@ -87,34 +87,35 @@ jobs:
             local_bridge/v04_service.py \
             local_bridge/mkultra_v04_bridge.py
 
-      - name: Run Python unit tests
+      - name: Run root Python unit tests
+        if: always()
         shell: bash
         run: |
           set -o pipefail
           python -m unittest discover \
             -s tests \
             -p "test_*.py" \
-            -v 2>&1 | tee python-test-output.txt
+            -v 2>&1 | tee -a python-test-output.txt
 
-      - name: Run VIREAX consciousness observer tests
+      - name: Run qviraex package tests
         if: always()
         shell: bash
         run: |
-          python -m unittest qviraex.vireax.tests.test_consciousness_mode -v
+          set -o pipefail
+          python -m unittest discover \
+            -s qviraex/tests \
+            -p "test_*.py" \
+            -v 2>&1 | tee -a python-test-output.txt
 
-      - name: Run VIREAX multi-model communication tests
+      - name: Run complete VIREAX test suite
         if: always()
         shell: bash
         run: |
-          python -m unittest qviraex.vireax.tests.test_multi_model -v
-
-      - name: Run VIREAX multi-model and provider adapter tests
-        if: always()
-        shell: bash
-        run: |
-          python -m unittest qviraex.vireax.tests.test_multi_model -v
-          python -m unittest qviraex.vireax.tests.test_openai_compatible_adapter -v
-          python -m unittest qviraex.vireax.tests.test_anthropic_adapter -v
+          set -o pipefail
+          python -m unittest discover \
+            -s qviraex/vireax/tests \
+            -p "test_*.py" \
+            -v 2>&1 | tee -a python-test-output.txt
 
       - name: Upload Python test report
         if: always()

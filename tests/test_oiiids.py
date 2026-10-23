@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from oiiids import (
     AccessScope,
     InMemoryResourceStore,
@@ -7,6 +9,7 @@ from oiiids import (
     ResourceExchangeService,
     ResourceManifest,
     ResourcePayload,
+    ResourceStatus,
 )
 from oiiids.security import HMACSigner
 
@@ -45,6 +48,7 @@ def test_owner_can_publish_and_authorised_peer_can_read() -> None:
 
     assert published.accepted is True
     assert published.envelope is not None
+    assert published.envelope.manifest.status is ResourceStatus.PUBLISHED
     result = service.read(
         published.envelope.manifest.resource_id,
         principal="member:peer",
@@ -84,6 +88,23 @@ def test_tampered_payload_fails_integrity_check() -> None:
 
     assert result.accepted is False
     assert result.code == "digest_mismatch"
+
+
+def test_published_manifest_status_is_signed() -> None:
+    signer = HMACSigner(SECRET)
+    service = ResourceExchangeService(store=InMemoryResourceStore(), signer=signer)
+
+    result = service.publish(build_resource(), principal="member:marek")
+
+    assert result.accepted is True
+    assert result.envelope is not None
+    assert signer.verify(result.envelope) is True
+
+    mutated = replace(
+        result.envelope,
+        manifest=replace(result.envelope.manifest, status=ResourceStatus.DRAFT),
+    )
+    assert signer.verify(mutated) is False
 
 
 def test_new_version_references_previous_envelope_digest() -> None:
