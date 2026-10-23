@@ -58,6 +58,18 @@ class AraChatBridgeSecurityTests(unittest.TestCase):
         self.assertNotIn("do-not-leak", json.dumps(result))
         self.assertNotIn("internal", json.dumps(result))
 
+    def test_network_provider_error_is_sanitized(self) -> None:
+        import urllib.error
+
+        with patch.object(bridge, "run_ara_chat", side_effect=urllib.error.URLError("secret-host.internal")):
+            status, _, result = self.request({
+                "allow_ara": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            })
+        self.assertEqual(status, 502)
+        self.assertEqual(result["error"], "ara_provider_request_failed")
+        self.assertNotIn("secret-host.internal", json.dumps(result))
+
     def test_oversized_request_body_is_rejected(self) -> None:
         oversized = b'{"allow_ara":true,"padding":"' + b"x" * (bridge.MAX_REQUEST_BYTES + 1) + b'"}'
         status, _, result = self.request({}, raw=oversized)
