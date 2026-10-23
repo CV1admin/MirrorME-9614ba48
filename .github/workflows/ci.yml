@@ -24,7 +24,7 @@ jobs:
 
       - name: Initialize Python test report
         shell: bash
-        run: printf '%s\\n' 'Python test suites have not run yet.' > python-test-output.txt
+        run: echo 'Python test suites have not run yet.' > python-test-output.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
