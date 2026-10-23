@@ -49,7 +49,7 @@ const AraChatPanel: React.FC = () => {
       return;
     }
 
-    const history = [...messages.filter(m => m.role === Role.USER || m.role === Role.ASSISTANT), {
+    const history = [...messages.filter(m => (m.role === Role.USER || m.role === Role.ASSISTANT) && m.status !== 'failed'), {
       id: crypto.randomUUID(),
       role: Role.USER,
       content: text,
