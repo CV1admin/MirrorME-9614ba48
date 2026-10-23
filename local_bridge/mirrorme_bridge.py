@@ -179,6 +179,9 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
 
         try:
             if path == "/api/ara/chat":
+                if not _is_local_address(self.server.server_address[0]):  # type: ignore[attr-defined]
+                    self._send_json(403, {"ok": False, "error": "ara_chat_requires_loopback_binding"})
+                    return
                 if run_ara_chat is None:
                     self._send_json(503, {"ok": False, "error": "ara_chat_unavailable"})
                     return
