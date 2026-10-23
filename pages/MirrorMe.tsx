@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ChatInterface from '../components/ChatInterface';
+import AraChatPanel from '../components/AraChatPanel';
 import { SimulationState } from '../types';
 
 interface MirrorMeProps {
@@ -7,6 +8,8 @@ interface MirrorMeProps {
 }
 
 const MirrorMe: React.FC<MirrorMeProps> = ({ simState }) => {
+  const [chatMode, setChatMode] = useState<'local' | 'ara'>('local');
+
   return (
     <div className="h-full grid grid-cols-1 xl:grid-cols-3 gap-0">
       <div className="xl:col-span-2 p-8 overflow-y-auto border-r border-slate-800 bg-slate-950/30">
@@ -60,8 +63,18 @@ const MirrorMe: React.FC<MirrorMeProps> = ({ simState }) => {
         </section>
       </div>
 
-      <div className="min-h-[480px] h-full">
-        <ChatInterface simState={simState} />
+      <div className="min-h-[480px] h-full flex flex-col gap-2 p-2">
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-800 bg-slate-950 p-1">
+          <button type="button" onClick={() => setChatMode('local')} aria-pressed={chatMode === 'local'} className={`rounded-md px-2 py-2 text-[10px] font-bold uppercase tracking-wider ${chatMode === 'local' ? 'bg-slate-800 text-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}>
+            Local chat
+          </button>
+          <button type="button" onClick={() => setChatMode('ara')} aria-pressed={chatMode === 'ara'} className={`rounded-md px-2 py-2 text-[10px] font-bold uppercase tracking-wider ${chatMode === 'ara' ? 'bg-cyan-950 text-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}>
+            ARA backend
+          </button>
+        </div>
+        <div className="flex-1 min-h-0">
+          {chatMode === 'local' ? <ChatInterface simState={simState} /> : <AraChatPanel />}
+        </div>
       </div>
     </div>
   );
