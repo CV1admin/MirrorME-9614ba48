@@ -44,11 +44,12 @@ class ResourceExchangeService:
         if not may_publish(envelope, principal):
             return ExchangeResult(False, "publish_forbidden")
 
-        signed = self._signer.sign(envelope)
-        published = replace(
-            signed,
-            manifest=replace(signed.manifest, status=ResourceStatus.PUBLISHED),
+        # Finalize status before signing because it is part of the signed manifest.
+        to_publish = replace(
+            envelope,
+            manifest=replace(envelope.manifest, status=ResourceStatus.PUBLISHED),
         )
+        published = self._signer.sign(to_publish)
         observer_hash = self._observer.record(
             {
                 "event": "resource.publish",
