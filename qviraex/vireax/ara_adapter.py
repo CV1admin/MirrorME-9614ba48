@@ -70,6 +70,7 @@ def create_ara_adapter_from_env(
         endpoint=endpoint,
         api_model=api_model,
         api_key_env=api_key_env,
+        environ=env,
     )
 
 
