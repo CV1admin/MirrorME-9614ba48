@@ -116,8 +116,13 @@ class AraAdapterConfigurationTests(unittest.TestCase):
             "VIREAX_ARA_API_KEY_ENV": "ARA_TEST_SECRET",
             "ARA_TEST_SECRET": "test-only-secret",
         })
+        fake = FakeOpener()
+        adapter._opener = fake  # type: ignore[assignment]
+        result = adapter.respond(AdapterEnvelope("ARA", "independent_analyst", "Review safely."))
         self.assertEqual(adapter.api_key_env, "ARA_TEST_SECRET")
         self.assertNotEqual(adapter.api_key_env, "test-only-secret")
+        self.assertEqual(fake.request.get_header("Authorization"), "Bearer test-only-secret")
+        self.assertEqual(result.output, "ARA challenges the assumption and asks for evidence.")
 
 
 if __name__ == "__main__":
