@@ -38,6 +38,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from qviraex.vireax.ara_chat import AraChatRequestError, run_ara_chat
+except ImportError:  # pragma: no cover - package ships with repository
+    AraChatRequestError = ValueError  # type: ignore[assignment,misc]
+    run_ara_chat = None  # type: ignore[assignment]
+
 _BRIDGE_DIR = Path(__file__).resolve().parent
 if str(_BRIDGE_DIR) not in sys.path:
     sys.path.insert(0, str(_BRIDGE_DIR))
@@ -172,6 +178,26 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
 
         try:
+            if path == "/api/ara/chat":
+                if run_ara_chat is None:
+                    self._send_json(503, {"ok": False, "error": "ara_chat_unavailable"})
+                    return
+                payload = _read_json(self)
+                try:
+                    result = run_ara_chat(payload)
+                except PermissionError:
+                    self._send_json(403, {"ok": False, "error": "explicit_ara_consent_required"})
+                    return
+                except AraChatRequestError as exc:
+                    self._send_json(400, {"ok": False, "error": str(exc)})
+                    return
+                except (RuntimeError, ValueError):
+                    # Never expose provider response bodies, endpoint details or credentials.
+                    self._send_json(502, {"ok": False, "error": "ara_provider_request_failed"})
+                    return
+                self._send_json(200, result)
+                return
+
             if path == "/api/chat":
                 payload = _read_json(self)
                 self._proxy_ollama_chat(payload)
