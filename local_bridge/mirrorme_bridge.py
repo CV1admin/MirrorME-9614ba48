@@ -202,6 +202,11 @@ class MirrorMeBridgeHandler(BaseHTTPRequestHandler):
                     # Never expose provider response bodies, endpoint details or credentials.
                     self._send_json(502, {"ok": False, "error": "ara_provider_request_failed"})
                     return
+                except Exception:
+                    # Network and unexpected provider exceptions must not reach the generic
+                    # bridge handler, which is designed for the local Ollama route.
+                    self._send_json(502, {"ok": False, "error": "ara_provider_request_failed"})
+                    return
                 self._send_json(200, result)
                 return
 
