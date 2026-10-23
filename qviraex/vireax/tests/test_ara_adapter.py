@@ -24,7 +24,11 @@ class FakeResponse:
 
 
 class FakeOpener:
+    def __init__(self) -> None:
+        self.request = None
+
     def open(self, request: object, timeout: float) -> FakeResponse:
+        self.request = request
         body = json.dumps({
             "id": "ara-test-response",
             "choices": [{"message": {"content": "ARA challenges the assumption and asks for evidence."}}],
