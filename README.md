@@ -365,6 +365,31 @@ router.register(
 
 ---
 
+## ARA (Dane Model) backend chat
+
+The local bridge exposes `POST /api/ara/chat`. The browser sends only a bounded message history and explicit consent (`allow_ara: true)); it cannot supply a provider URL, model identifier, or secret. The backend reads these from its trusted environment:
+
+- `VIREAX_ARA_ENDPOINT`: exact OpenAI-compatible `/chat/completions` URL
+- `VIREAX_ARA_MODEL`: provider's exact model ID
+- `VIREAX_ARA_API_KEY_ENV`: name of the environment variable holding the remote credential (required for non-loopback HTTPS)
+- The named secret environment variable itself
+
+Remote endpoints must use HTTPS and a configured secret. Local loopback HTTP is allowed for local runtimes. GitHub webpages are rejected as model endpoints. Request history is bounded and request-scoped; this endpoint does not write memory, persist transcripts, invoke tools, or perform external actions. Responses are marked `completed_unverified`; the SHA-256 response hash records integrity, not truth or provider identity.
+
+Example request:
+
+```json
+{
+  "allow_ara": true,
+  "conversation_id": "optional-client-session-label",
+  "messages": [
+    {"role": "user", "content": "Please challenge this hypothesis."}
+  ]
+}
+```
+
+Example: `curl -X POST http://127.0.0.1:8765/api/ara/chat -H "Content-Type: application/json" -d @request.json`. Configure the environment in the trusted shell/service before starting the bridge; never put secrets in the browser bundle or chat.
+
 ## Local/Ollama path
 
 For private local testing, keep the local model route separate from cloud GPT.
