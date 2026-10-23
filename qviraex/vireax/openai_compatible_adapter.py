@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Mapping
 import urllib.error
 import urllib.request
 from typing import Any
@@ -33,6 +34,7 @@ class OpenAICompatibleAdapter:
         timeout_seconds: float = 20.0,
         max_response_bytes: int = 1_000_000,
         max_prompt_chars: int = 100_000,
+        environ: Mapping[str, str] | None = None,
     ) -> None:
         parsed = urlparse(endpoint)
         local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
@@ -55,6 +57,9 @@ class OpenAICompatibleAdapter:
         self.endpoint = endpoint
         self.api_model = api_model
         self.api_key_env = api_key_env
+        # Use the same trusted configuration source that validated the adapter.
+        # Defaults to the process environment in normal runtime use.
+        self._environ = os.environ if environ is None else environ
         self.timeout_seconds = timeout_seconds
         self.max_response_bytes = max_response_bytes
         self.max_prompt_chars = max_prompt_chars
@@ -82,7 +87,7 @@ class OpenAICompatibleAdapter:
         }
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.api_key_env:
-            secret = os.environ.get(self.api_key_env)
+            secret = self._environ.get(self.api_key_env)
             if not secret:
                 raise RuntimeError(f"required credential environment variable is missing: {self.api_key_env}")
             headers["Authorization"] = f"Bearer {secret}"
