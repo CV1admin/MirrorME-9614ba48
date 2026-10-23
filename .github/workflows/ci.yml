@@ -24,10 +24,7 @@ jobs:
 
       - name: Initialize Python test report
         shell: bash
-        run: |
-          printf '%s\n' \
-            'Python test suites have not run yet.' \
-            > python-test-output.txt
+        run: echo 'Python test suites have not run yet.' > python-test-output.txt
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -74,48 +71,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m json.tool knowledge/mkultra-v0.4-source-manifest.json >/dev/null
+          python -m py_compile qviraex/thin_line/claims.py qviraex/evolution/governed.py qviraex/mkultra_v04.py local_bridge/mirrorme_bridge.py local_bridge/v04_service.py local_bridge/mkultra_v04_bridge.py
 
-          python -m json.tool \
-            knowledge/mkultra-v0.4-source-manifest.json \
-            >/dev/null
-
-          python -m py_compile \
-            qviraex/thin_line/claims.py \
-            qviraex/evolution/governed.py \
-            qviraex/mkultra_v04.py \
-            local_bridge/mirrorme_bridge.py \
-            local_bridge/v04_service.py \
-            local_bridge/mkultra_v04_bridge.py
-
-      - name: Run root Python unit tests
+      - name: Run all Python tests with pytest
         if: always()
         shell: bash
         run: |
           set -o pipefail
-          python -m unittest discover \
-            -s tests \
-            -p "test_*.py" \
-            -v 2>&1 | tee -a python-test-output.txt
-
-      - name: Run qviraex package tests
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          python -m unittest discover \
-            -s qviraex/tests \
-            -p "test_*.py" \
-            -v 2>&1 | tee -a python-test-output.txt
-
-      - name: Run complete VIREAX test suite
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          python -m unittest discover \
-            -s qviraex/vireax/tests \
-            -p "test_*.py" \
-            -v 2>&1 | tee -a python-test-output.txt
+          python -m pytest tests qviraex -v 2>&1 | tee -a python-test-output.txt
 
       - name: Upload Python test report
         if: always()
