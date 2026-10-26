@@ -20,8 +20,6 @@ const GENESIS = 'GENESIS';
 const encoder = new TextEncoder();
 const hex = (bytes: ArrayBuffer) => Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
 const digest = async (value: string) => `sha256:${hex(await crypto.subtle.digest('SHA-256', encoder.encode(value)))}`;
-const canonical = (value: unknown) => JSON.stringify(value, Object.keys(value as object).sort());
-
 async function hashObject(value: Record<string, unknown>): Promise<string> {
   // This object is flat, so sorting its top-level keys produces a stable representation.
   const stable = Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)));
@@ -54,15 +52,15 @@ const VireaxContinuum: React.FC = () => {
   const [content, setContent] = useState('');
   const [beforeState, setBeforeState] = useState('');
   const [afterState, setAfterState] = useState('');
+  const [lastStateValue, setLastStateValue] = useState('');
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [verified, setVerified] = useState<boolean | null>(null);
 
-  const lastState = entries.length ? entries[entries.length - 1].afterDigest : null;
   const duplicateId = entries.some((entry) => entry.eventId === eventId.trim());
   const canAppend = !!eventId.trim() && !!source.trim() && !!content.trim() && !!afterState.trim()
-    && !duplicateId && !busy && (entries.length > 0 ? beforeState.trim() === lastState : !beforeState.trim());
+    && !duplicateId && !busy && (entries.length > 0 ? beforeState.trim() === lastStateValue : !beforeState.trim());
 
   const summary = useMemo(() => ({
     total: entries.length,
@@ -92,6 +90,7 @@ const VireaxContinuum: React.FC = () => {
       setEventId('');
       setContent('');
       setBeforeState(afterState);
+      setLastStateValue(afterState.trim());
       setNotice('Entry added to this session. No persistent memory was written.');
       setVerified(null);
     } catch {
@@ -214,7 +213,7 @@ const VireaxContinuum: React.FC = () => {
             </Field>
           </div>
           {duplicateId && <p className="text-xs text-rose-300">This event ID is already used in this session.</p>}
-          {entries.length > 0 && beforeState.trim() !== lastState && <p className="text-xs text-amber-200">State continuity check: previous state must exactly match the last recorded state.</p>}
+          {entries.length > 0 && beforeState.trim() !== lastStateValue && <p className="text-xs text-amber-200">State continuity check: previous state must exactly match the last recorded state.</p>}
           {entries.length === 0 && beforeState.trim() && <p className="text-xs text-amber-200">The first entry must have no previous state.</p>}
           <button type="submit" disabled={!canAppend} className="w-full rounded-lg bg-cyan-500 px-4 py-3 text-sm font-bold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-40">
             {busy ? 'Processing…' : 'Hash and record transition'}
