@@ -12,6 +12,7 @@ const SystemMap = lazy(() => import('./pages/SystemMap'));
 const MKultraV04 = lazy(() => import('./pages/MKultraV04'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Vireax = lazy(() => import('./pages/Vireax'));
+const VireaxContinuum = lazy(() => import('./pages/VireaxContinuum'));
 
 const INITIAL_NODES = createBrainNodes();
 
@@ -127,6 +128,7 @@ const App: React.FC = () => {
             <Route path="/settings" element={<Settings />} />
             <Route path="/mkultra-v04" element={<MKultraV04 />} />
             <Route path="/vireax" element={<Vireax />} />
+            <Route path="/vireax-continuum" element={<VireaxContinuum />} />
             <Route path="/thin-line-theory" element={<ThinLineTheory />} />
           </Routes>
         </Suspense>
