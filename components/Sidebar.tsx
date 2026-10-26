@@ -8,6 +8,9 @@ const NAV_LINKS = [
     { to: '/vireax', label: 'VIREAX Chat', icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8h2a2 2 0 012 2v6a2 2 0 01-2 2h-2v4l-4-4H9a1.994 1.994 0 01-1.414-.586m0 0L11 14h4a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2v4l.586-.586z" /></svg>
     )},
+    { to: '/vireax-continuum', label: 'Continuum Observer', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v18m9-9H3m15.364-6.364a9 9 0 11-12.728 0 9 9 0 0112.728 0z" /></svg>
+    )},
     { to: '/system-map', label: 'Full System Map', icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v6m0 0H3m6 0h6m6 0h-6m0 0V3m0 6v6m0 0H9m6 0h6m-6 0v6m-6-6v6m0 0H5a2 2 0 01-2-2v-4m6 6h10a2 2 0 002-2v-4" /></svg>
     )},
