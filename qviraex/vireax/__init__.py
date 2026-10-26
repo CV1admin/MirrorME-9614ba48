@@ -3,6 +3,7 @@ from __future__ import annotations
 from .audit import AuditLedger, AuditRecord
 from .center_node import VIREAXCenterNode, VIREAXResult
 from .consensus import ConsensusScore, ConsensusWeights, select_best_response, score_response
+from .continuum import ContinuumEntry, ContinuumLedger
 from .envelope import ModelReasoningRequest, make_reasoning_request
 from .lightful import LightfulContext, LightfulDecision, LightfulGuard
 from .policy_gate import PolicyDecision, PolicyGate
@@ -14,6 +15,8 @@ __all__ = [
     "AuditRecord",
     "ConsensusScore",
     "ConsensusWeights",
+    "ContinuumEntry",
+    "ContinuumLedger",
     "ModelReasoningRequest",
     "LightfulContext",
     "LightfulDecision",
