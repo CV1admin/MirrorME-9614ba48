@@ -44,10 +44,12 @@ globally optimal.
    safety rules, and audit requirements.
 
 This primitive does not authorize actions, validate claims, or decide that a
-new claim is false because it conflicts with an old one. It is not wired into
-the existing VIREÁX Center Node automatically; integration requires a real
-trainable component with a defined loss and gradient source. Do not manufacture
-gradient vectors from semantic disagreement and describe them as GEM.
+new claim is false because it conflicts with an old one. The VIREÁX Center Node
+now exposes an explicit project_learning_update(...) integration method and
+audits projection diagnostics without logging raw gradient values. This is an
+integration seam only: the ordinary chat/reasoning path does not call it because
+that path does not provide a calibrated trainable loss/gradient source. Do not
+manufacture gradient vectors from semantic disagreement and describe them as GEM.
 
 ## Verification
 
