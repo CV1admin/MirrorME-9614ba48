@@ -59,3 +59,24 @@ python -m pytest tests/test_gem_projection.py
 
 Tests cover pass-through, orthogonality, 135° projection, exact opposition,
 multiple constraints, dimensional validation, and zero memory gradients.
+
+
+## Integration API
+
+The public package exports `ProtectedMemoryGradient`, `ProjectionResult`,
+`project_gradient`, and `project_protected_update`.
+
+The Center Node method accepts a candidate numerical gradient and explicit
+protected-memory records. Only records with a non-empty ID, an explicit
+`approved_for_protection=True`, and status `established`, `supported`, or
+`validated_invariant` are accepted. Other statuses fail closed. The approval
+flag is supplied by the caller; production integration must bind it to a
+trusted policy/consent record rather than trust arbitrary caller input.
+
+The audit entry stores protected memory IDs and solver diagnostics, not raw
+gradient values. Rejected protection attempts are also audited. A non-converged
+projection is audited and raises an error so callers must not apply that update.
+
+This API is not a semantic-memory truth detector and does not yet connect to a
+trainable model optimizer. Before doing so, define the model parameters, loss
+function, trusted gradient source, step-size policy, and post-update loss check.
