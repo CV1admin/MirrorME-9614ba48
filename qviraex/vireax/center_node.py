@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Sequence
 
 from .adapters import AdapterEnvelope, AdapterResult
 from .audit import AuditLedger
 from .consensus import ConsensusScore, ConsensusWeights, score_response, select_best_response
 from .envelope import make_reasoning_request
+from .gem_integration import ProtectedMemoryGradient, project_protected_update
+from .gem_projection import ProjectionResult, Vector
 from .lightful import LightfulContext, LightfulDecision, LightfulGuard
 from .policy_gate import PolicyGate
 from .roles import ModelRole, VIREAXState
@@ -35,6 +37,51 @@ class VIREAXCenterNode:
     policy_gate: PolicyGate = field(default_factory=PolicyGate)
     audit_ledger: AuditLedger = field(default_factory=AuditLedger)
     lightful_guard: LightfulGuard = field(default_factory=LightfulGuard)
+
+    def project_learning_update(
+        self,
+        *,
+        session_id: str,
+        operator: str,
+        candidate_gradient: Vector,
+        protected_memories: Sequence[ProtectedMemoryGradient],
+    ) -> ProjectionResult:
+        """Project an explicitly supplied numerical update and audit diagnostics.
+
+        This method is an integration seam for a trainable component. It does
+        not derive gradients from language or semantic disagreement, and it
+        does not alter the ordinary chat/reasoning path.
+        """
+        memory_ids = [memory.memory_id for memory in protected_memories]
+        try:
+            result = project_protected_update(candidate_gradient, protected_memories)
+        except (TypeError, ValueError) as exc:
+            self.audit_ledger.commit({
+                "session_id": session_id,
+                "operator": operator,
+                "decision": "GEM_PROJECTION_REJECTED",
+                "reason": str(exc),
+                "protected_memory_ids": memory_ids,
+                "gradient_values_logged": False,
+            })
+            raise
+
+        payload = {
+            "session_id": session_id,
+            "operator": operator,
+            "decision": "GEM_PROJECTION",
+            "protected_memory_ids": memory_ids,
+            "converged": result.converged,
+            "iterations": result.iterations,
+            "max_constraint_violation": result.max_constraint_violation,
+            "projection_distance": result.projection_distance,
+            "retained_norm": result.retained_norm,
+            "gradient_values_logged": False,
+        }
+        self.audit_ledger.commit(payload)
+        if not result.converged:
+            raise RuntimeError("GEM projection did not converge; update must not be applied")
+        return result
 
     def run(
         self,
